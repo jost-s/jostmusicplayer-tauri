@@ -76,10 +76,16 @@ pub fn get_tracks(conn: &Connection, sort_by: &str, sort_dir: &str) -> Result<Ve
     };
     let direction = if sort_dir == "desc" { "DESC" } else { "ASC" };
 
+    let second_sort_order = if col == "artist" || col == "album" {
+        &format!(", track_num {direction}")
+    } else {
+        ""
+    };
+
     let sql = format!(
         "SELECT id, path, filename, title, artist, album, year, track_num, duration
          FROM tracks
-         ORDER BY CASE WHEN {col} IS NULL THEN 1 ELSE 0 END, {col} {direction}"
+         ORDER BY CASE WHEN {col} IS NULL THEN 1 ELSE 0 END, {col} {direction} {second_sort_order}"
     );
 
     let mut stmt = conn.prepare(&sql)?;
@@ -275,5 +281,58 @@ mod tests {
         // must not panic or return error with unknown col
         let tracks = get_tracks(&conn, "unknown_col", "asc").unwrap();
         assert_eq!(tracks.len(), 1);
+    }
+
+    #[test]
+    fn get_tracks_sorts_second_by_track_number_for_artist() {
+        let conn = open_db();
+        upsert_track(
+            &conn,
+            &TrackRow {
+                path: "/b.mp3".to_owned(),
+                filename: "b.mp3".to_owned(),
+                title: None,
+                artist: Some("A".to_owned()),
+                album: Some("A".to_owned()),
+                year: None,
+                track_num: Some(2),
+                duration: None,
+            },
+        )
+        .unwrap();
+        upsert_track(
+            &conn,
+            &TrackRow {
+                path: "/a.mp3".to_owned(),
+                filename: "a.mp3".to_owned(),
+                title: None,
+                artist: Some("A".to_owned()),
+                album: Some("A".to_owned()),
+                year: None,
+                track_num: Some(1),
+                duration: None,
+            },
+        )
+        .unwrap();
+
+        // Check ascending order for artist
+        let tracks = get_tracks(&conn, "artist", "asc").unwrap();
+        assert_eq!(tracks[0].track_num.unwrap(), 1);
+        assert_eq!(tracks[1].track_num.unwrap(), 2);
+
+        // Descending order
+        let tracks = get_tracks(&conn, "artist", "desc").unwrap();
+        assert_eq!(tracks[0].track_num.unwrap(), 2);
+        assert_eq!(tracks[1].track_num.unwrap(), 1);
+
+        // Ascending order for album
+        let tracks = get_tracks(&conn, "album", "asc").unwrap();
+        assert_eq!(tracks[0].track_num.unwrap(), 1);
+        assert_eq!(tracks[1].track_num.unwrap(), 2);
+
+        // Descending order
+        let tracks = get_tracks(&conn, "album", "desc").unwrap();
+        assert_eq!(tracks[0].track_num.unwrap(), 2);
+        assert_eq!(tracks[1].track_num.unwrap(), 1);
     }
 }
