@@ -4,10 +4,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import TrackList, { type Track } from "./components/TrackList.vue";
+import SettingsDialog from "./components/SettingsDialog.vue";
 
 const selectedFolder = ref<string | null>(null);
 const tracks = ref<Track[]>([]);
 const loading = ref(false);
+const showSettings = ref(false);
 const currentTrack = ref<Track | null>(null);
 const isPlaying = ref(false);
 const position = ref(0);
@@ -34,6 +36,9 @@ onMounted(async () => {
       sortBy: "artist",
       sortDir: "asc",
     });
+  } else {
+    // First launch with no library configured — prompt the user to pick one.
+    showSettings.value = true;
   }
   await listen("playback-ended", () => {
     isPlaying.value = false;
@@ -113,13 +118,6 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
   <div class="app">
     <header class="toolbar">
       <h1>Jost Music Player</h1>
-      <div class="folder-row">
-        <button :disabled="loading" @click="selectMusicFolder">
-          {{ loading ? "Scanning…" : "Select Music Folder" }}
-        </button>
-        <span v-if="selectedFolder" class="folder-path">{{ selectedFolder }}</span>
-      </div>
-
       <div class="transport">
         <button
           class="play-toggle"
@@ -134,6 +132,15 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
           <span v-if="currentTrack.artist" class="np-artist">{{ currentTrack.artist }}</span>
         </div>
       </div>
+
+      <button
+        class="cog-btn"
+        :class="{ spin: loading }"
+        title="Settings"
+        @click="showSettings = true"
+      >
+        ⚙
+      </button>
     </header>
 
     <div v-if="currentTrack" class="progress-row">
@@ -162,6 +169,14 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
         @play-track="playTrack"
       />
     </main>
+
+    <SettingsDialog
+      v-if="showSettings"
+      :selected-folder="selectedFolder"
+      :loading="loading"
+      @close="showSettings = false"
+      @select-folder="selectMusicFolder"
+    />
   </div>
 </template>
 
@@ -207,26 +222,29 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
   white-space: nowrap;
 }
 
-.folder-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  overflow: hidden;
+.cog-btn {
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  font-size: 1.1em;
+  line-height: 1;
+  margin-left: auto;
 }
 
-.folder-path {
-  font-size: 0.8em;
-  color: #666;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.cog-btn.spin {
+  animation: spin 1.5s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .transport {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  margin-left: auto;
   overflow: hidden;
 }
 
@@ -371,7 +389,6 @@ button:disabled {
     border-bottom-color: #444;
   }
 
-  .folder-path,
   .np-artist,
   .time {
     color: #aaa;
