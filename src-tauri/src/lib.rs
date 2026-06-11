@@ -1,4 +1,5 @@
 mod db;
+mod player;
 mod scanner;
 
 use rusqlite::Connection;
@@ -71,6 +72,26 @@ fn get_library(sort_by: String, sort_dir: String, state: State<AppState>) -> Res
     db::get_tracks(&conn, &sort_by, &sort_dir).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn play_track(path: String, player: State<player::AudioPlayer>) -> Result<Option<f64>, String> {
+    player.play(path)
+}
+
+#[tauri::command]
+fn toggle_playback(player: State<player::AudioPlayer>) -> bool {
+    player.toggle()
+}
+
+#[tauri::command]
+fn playback_position(player: State<player::AudioPlayer>) -> f64 {
+    player.position()
+}
+
+#[tauri::command]
+fn seek(seconds: f64, player: State<player::AudioPlayer>) -> Result<(), String> {
+    player.seek(seconds)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -99,6 +120,8 @@ pub fn run() {
                 config_path,
             });
 
+            app.manage(player::AudioPlayer::new(app.handle().clone()));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -106,6 +129,10 @@ pub fn run() {
             set_library_folder,
             scan_library,
             get_library,
+            play_track,
+            toggle_playback,
+            playback_position,
+            seek,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

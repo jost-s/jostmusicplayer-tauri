@@ -1,12 +1,31 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import TrackList, { type Track } from "./components/TrackList.vue";
 
 const selectedFolder = ref<string | null>(null);
 const tracks = ref<Track[]>([]);
 const loading = ref(false);
+const currentTrack = ref<Track | null>(null);
+const isPlaying = ref(false);
+const position = ref(0);
+const duration = ref(0);
+const showRemaining = ref(false);
+
+const progressPercent = computed(() =>
+  duration.value > 0 ? Math.min(100, (position.value / duration.value) * 100) : 0,
+);
+
+const elapsedLabel = computed(() => {
+  if (showRemaining.value && duration.value > 0) {
+    return "-" + formatTime(Math.max(0, duration.value - position.value));
+  }
+  return formatTime(position.value);
+});
+
+let posTimer: ReturnType<typeof setInterval> | undefined;
 
 onMounted(async () => {
   selectedFolder.value = await invoke<string | null>("get_library_folder");
@@ -16,7 +35,52 @@ onMounted(async () => {
       sortDir: "asc",
     });
   }
+  await listen("playback-ended", () => {
+    isPlaying.value = false;
+    position.value = 0;
+    currentTrack.value = null;
+    duration.value = 0;
+  });
+  posTimer = setInterval(async () => {
+    if (currentTrack.value && isPlaying.value) {
+      position.value = await invoke<number>("playback_position");
+    }
+  }, 500);
 });
+
+onUnmounted(() => {
+  if (posTimer !== undefined) clearInterval(posTimer);
+});
+
+async function playTrack(track: Track) {
+  const total = await invoke<number | null>("play_track", { path: track.path });
+  currentTrack.value = track;
+  isPlaying.value = true;
+  position.value = 0;
+  // Prefer the duration the decoder reports; fall back to the scanned tag length.
+  duration.value = total ?? track.duration ?? 0;
+}
+
+async function togglePlayback() {
+  isPlaying.value = await invoke<boolean>("toggle_playback");
+}
+
+async function seekTo(e: MouseEvent) {
+  if (duration.value <= 0) return;
+  const bar = e.currentTarget as HTMLElement;
+  const rect = bar.getBoundingClientRect();
+  const fraction = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+  const seconds = fraction * duration.value;
+  position.value = seconds;
+  await invoke("seek", { seconds });
+}
+
+function formatTime(seconds: number): string {
+  const total = Math.floor(seconds);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
 
 async function selectMusicFolder() {
   const folder = await open({
@@ -55,10 +119,48 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
         </button>
         <span v-if="selectedFolder" class="folder-path">{{ selectedFolder }}</span>
       </div>
+
+      <div class="transport">
+        <button
+          class="play-toggle"
+          :disabled="!currentTrack"
+          :title="isPlaying ? 'Pause' : 'Play'"
+          @click="togglePlayback"
+        >
+          {{ isPlaying ? "⏸" : "▶" }}
+        </button>
+        <div v-if="currentTrack" class="now-playing">
+          <span class="np-title">{{ currentTrack.title ?? currentTrack.filename }}</span>
+          <span v-if="currentTrack.artist" class="np-artist">{{ currentTrack.artist }}</span>
+        </div>
+      </div>
     </header>
 
+    <div v-if="currentTrack" class="progress-row">
+      <span
+        class="time clickable"
+        :title="showRemaining ? 'Show elapsed time' : 'Show remaining time'"
+        @click="showRemaining = !showRemaining"
+        >{{ elapsedLabel }}</span
+      >
+      <div
+        class="progress-bar"
+        :class="{ disabled: duration <= 0 }"
+        @click="seekTo"
+      >
+        <div class="progress-fill" :style="{ width: progressPercent + '%' }"></div>
+        <div class="progress-knob" :style="{ left: progressPercent + '%' }"></div>
+      </div>
+      <span class="time">{{ duration > 0 ? formatTime(duration) : "—" }}</span>
+    </div>
+
     <main class="library">
-      <TrackList :tracks="tracks" @sort-change="onSortChange" />
+      <TrackList
+        :tracks="tracks"
+        :playing-id="currentTrack?.id ?? null"
+        @sort-change="onSortChange"
+        @play-track="playTrack"
+      />
     </main>
   </div>
 </template>
@@ -120,6 +222,112 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
   white-space: nowrap;
 }
 
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+  overflow: hidden;
+}
+
+.play-toggle {
+  width: 2.2rem;
+  padding: 0.4em 0;
+  font-size: 0.9em;
+  text-align: center;
+}
+
+.now-playing {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  overflow: hidden;
+}
+
+.np-title {
+  font-size: 0.85em;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-artist {
+  font-size: 0.75em;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1.5rem;
+  border-bottom: 1px solid #ddd;
+  flex-shrink: 0;
+}
+
+.time {
+  font-size: 0.75em;
+  color: #666;
+  font-variant-numeric: tabular-nums;
+  min-width: 4ch;
+  text-align: center;
+}
+
+.time.clickable {
+  cursor: default;
+  user-select: none;
+  transition: color 0.15s;
+}
+
+.time.clickable:hover {
+  color: #396cd8;
+}
+
+.progress-bar {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background-color: #ddd;
+  cursor: default;
+}
+
+.progress-bar.disabled {
+  cursor: default;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: #396cd8;
+  border-radius: 3px;
+}
+
+.progress-knob {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background-color: #396cd8;
+  transform: translateY(-50%);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  transition: transform 0.1s ease;
+}
+
+.progress-bar:hover .progress-knob {
+  transform: translateY(-50%) scale(1.3);
+}
+
+.progress-bar.disabled .progress-knob {
+  display: none;
+}
+
 .library {
   flex: 1;
   overflow-y: auto;
@@ -158,12 +366,23 @@ button:disabled {
     background-color: #2f2f2f;
   }
 
-  .toolbar {
+  .toolbar,
+  .progress-row {
     border-bottom-color: #444;
   }
 
-  .folder-path {
+  .folder-path,
+  .np-artist,
+  .time {
     color: #aaa;
+  }
+
+  .progress-bar {
+    background-color: #4a4a4a;
+  }
+
+  .time.clickable:hover {
+    color: #7aa2f7;
   }
 
   button {

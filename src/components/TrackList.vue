@@ -13,9 +13,10 @@ export interface Track {
   duration: number | null;
 }
 
-const props = defineProps<{ tracks: Track[] }>();
+const props = defineProps<{ tracks: Track[]; playingId: number | null }>();
 const emit = defineEmits<{
   "sort-change": [sortBy: string, sortDir: "asc" | "desc"];
+  "play-track": [track: Track];
 }>();
 
 const sortBy = ref("artist");
@@ -70,7 +71,12 @@ const COLUMNS: { key: string; label: string }[] = [
         <tr v-if="props.tracks.length === 0">
           <td colspan="6" class="empty">No tracks found.</td>
         </tr>
-        <tr v-for="track in props.tracks" :key="track.id">
+        <tr
+          v-for="track in props.tracks"
+          :key="track.id"
+          :class="{ playing: track.id === props.playingId }"
+          @dblclick="emit('play-track', track)"
+        >
           <td class="num">{{ track.track_num ?? "—" }}</td>
           <td class="title">{{ track.title ?? track.filename }}</td>
           <td>{{ track.artist ?? "—" }}</td>
@@ -122,8 +128,21 @@ thead th.active {
   font-size: 0.8em;
 }
 
+tbody tr {
+  cursor: default;
+  user-select: none;
+}
+
 tbody tr:hover {
   background-color: rgba(0, 0, 0, 0.04);
+}
+
+tbody tr.playing {
+  background-color: rgba(57, 108, 216, 0.12);
+}
+
+tbody tr.playing td.title {
+  color: #396cd8;
 }
 
 tbody td {
@@ -163,6 +182,14 @@ td.empty {
 
   tbody tr:hover {
     background-color: rgba(255, 255, 255, 0.05);
+  }
+
+  tbody tr.playing {
+    background-color: rgba(122, 162, 247, 0.2);
+  }
+
+  tbody tr.playing td.title {
+    color: #7aa2f7;
   }
 
   tbody td {
