@@ -1,10 +1,11 @@
 use std::fs::File;
 use std::io::BufReader;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Duration;
 
-use rodio::{Decoder, OutputStream, Sink, Source};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use tauri::{AppHandle, Emitter};
 
 /// How often the audio thread wakes up (when idle on commands) to check whether
@@ -64,40 +65,26 @@ impl AudioPlayer {
 
             loop {
                 match rx.recv_timeout(POLL_INTERVAL) {
-                    Ok(AudioCommand::Play { path, resp }) => {
-                        let _ = resp.send(start_playback(&handle, &path, &mut sink));
-                        active = sink.is_some();
-                    }
-                    Ok(AudioCommand::Toggle { resp }) => {
-                        let playing = match &sink {
-                            Some(s) => {
-                                if s.is_paused() {
-                                    s.play();
-                                    true
-                                } else {
-                                    s.pause();
-                                    false
-                                }
+                    Ok(cmd) => {
+                        // Isolate command handling: a panic (e.g. a malformed file
+                        // tripping a decoder) drops the current track but keeps the
+                        // thread alive, so playback recovers on the next command
+                        // instead of every later command failing with a closed channel.
+                        let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+                            handle_command(cmd, &handle, &mut sink)
+                        }));
+                        match outcome {
+                            Ok(Some(new_active)) => active = new_active,
+                            Ok(None) => {}
+                            Err(_) => {
+                                eprintln!("audio: command handler panicked; dropping track");
+                                sink = None;
+                                active = false;
                             }
-                            None => false,
-                        };
-                        let _ = resp.send(playing);
-                    }
-                    Ok(AudioCommand::Position { resp }) => {
-                        let secs = sink.as_ref().map_or(0.0, |s| s.get_pos().as_secs_f64());
-                        let _ = resp.send(secs);
-                    }
-                    Ok(AudioCommand::Seek { secs, resp }) => {
-                        let result = match &sink {
-                            Some(s) => s
-                                .try_seek(Duration::from_secs_f64(secs.max(0.0)))
-                                .map_err(|e| format!("failed to seek: {e}")),
-                            None => Err("nothing is playing".to_string()),
-                        };
-                        let _ = resp.send(result);
+                        }
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if active && sink.as_ref().map_or(false, |s| s.empty()) {
+                        if active && sink.as_ref().is_some_and(|s| s.empty()) {
                             let _ = app.emit("playback-ended", ());
                             active = false;
                             sink = None;
@@ -146,27 +133,96 @@ impl AudioPlayer {
     }
 }
 
+/// Process one command, replying on its response channel. Returns `Some(active)`
+/// when the command changes whether a track is loaded (i.e. `Play`), else `None`.
+/// Runs inside `catch_unwind` on the audio thread, so it must not hold state that
+/// a panic would corrupt beyond `sink` (which the caller resets on panic).
+fn handle_command(
+    cmd: AudioCommand,
+    handle: &OutputStreamHandle,
+    sink: &mut Option<Sink>,
+) -> Option<bool> {
+    match cmd {
+        AudioCommand::Play { path, resp } => {
+            let _ = resp.send(start_playback(handle, &path, sink));
+            Some(sink.is_some())
+        }
+        AudioCommand::Toggle { resp } => {
+            let playing = match sink.as_ref() {
+                Some(s) => {
+                    if s.is_paused() {
+                        s.play();
+                        true
+                    } else {
+                        s.pause();
+                        false
+                    }
+                }
+                None => false,
+            };
+            let _ = resp.send(playing);
+            None
+        }
+        AudioCommand::Position { resp } => {
+            let secs = sink.as_ref().map_or(0.0, |s| s.get_pos().as_secs_f64());
+            let _ = resp.send(secs);
+            None
+        }
+        AudioCommand::Seek { secs, resp } => {
+            let result = match sink.as_ref() {
+                Some(s) => s
+                    .try_seek(Duration::from_secs_f64(secs.max(0.0)))
+                    .map_err(|e| format!("failed to seek: {e}")),
+                None => Err("nothing is playing".to_string()),
+            };
+            let _ = resp.send(result);
+            None
+        }
+    }
+}
+
 /// Decode `path` and start playing it on a fresh sink, replacing any current one.
-/// Returns the track's total duration in seconds when the decoder reports it.
+/// Returns the track's total duration in seconds when it can be determined.
 fn start_playback(
     handle: &rodio::OutputStreamHandle,
     path: &str,
     sink: &mut Option<Sink>,
 ) -> Result<Option<f64>, String> {
-    let file = File::open(path).map_err(|e| format!("failed to open file: {e}"))?;
-    let source =
-        Decoder::new(BufReader::new(file)).map_err(|e| format!("failed to decode: {e}"))?;
-    // rodio reports `None` for files it can't size up front (e.g. VBR MP3 without a
-    // Xing header); fall back to probing the file's properties with lofty.
-    let total = source
-        .total_duration()
-        .map(|d| d.as_secs_f64())
-        .filter(|&s| s > 0.0)
-        .or_else(|| probe_duration(path));
     let new_sink = Sink::try_new(handle).map_err(|e| format!("failed to create sink: {e}"))?;
-    new_sink.append(source);
+
+    // rodio's symphonia decoders don't cover Opus, so route .opus through our
+    // own libopus-backed source; everything else goes through rodio's decoder.
+    let total = if has_extension(path, "opus") {
+        // The Opus source can't report its own length, so probe it with lofty.
+        let total = probe_duration(path);
+        let source = crate::opus_source::OpusSource::new(path)?.with_total_duration(total);
+        new_sink.append(source);
+        total
+    } else {
+        let file = File::open(path).map_err(|e| format!("failed to open file: {e}"))?;
+        let source =
+            Decoder::new(BufReader::new(file)).map_err(|e| format!("failed to decode: {e}"))?;
+        // rodio reports `None` for files it can't size up front (e.g. VBR MP3 without a
+        // Xing header); fall back to probing the file's properties with lofty.
+        let total = source
+            .total_duration()
+            .map(|d| d.as_secs_f64())
+            .filter(|&s| s > 0.0)
+            .or_else(|| probe_duration(path));
+        new_sink.append(source);
+        total
+    };
+
     *sink = Some(new_sink); // dropping the old sink stops the previous track
     Ok(total)
+}
+
+/// Case-insensitive check of a path's file extension.
+fn has_extension(path: &str, ext: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case(ext))
 }
 
 /// Determine a track's duration by reading its audio properties. Works for VBR

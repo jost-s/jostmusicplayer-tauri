@@ -8,8 +8,10 @@ import SettingsDialog from "./components/SettingsDialog.vue";
 
 const selectedFolder = ref<string | null>(null);
 const tracks = ref<Track[]>([]);
-const loading = ref(false);
+const scanning = ref(false);
 const showSettings = ref(false);
+const sortBy = ref("artist");
+const sortDir = ref<"asc" | "desc">("asc");
 const currentTrack = ref<Track | null>(null);
 const isPlaying = ref(false);
 const position = ref(0);
@@ -30,22 +32,33 @@ const elapsedLabel = computed(() => {
 let posTimer: ReturnType<typeof setInterval> | undefined;
 
 onMounted(async () => {
-  selectedFolder.value = await invoke<string | null>("get_library_folder");
-  if (selectedFolder.value) {
-    tracks.value = await invoke<Track[]>("get_library", {
-      sortBy: "artist",
-      sortDir: "asc",
-    });
-  } else {
-    // First launch with no library configured — prompt the user to pick one.
-    showSettings.value = true;
-  }
+  // Register listeners first: a startup scan kicked off in the backend may
+  // finish before (or during) this handler, and we must not miss its events.
+  await listen("scan-started", () => {
+    scanning.value = true;
+  });
+  await listen("scan-finished", async () => {
+    scanning.value = false;
+    await refreshLibrary();
+  });
   await listen("playback-ended", () => {
     isPlaying.value = false;
     position.value = 0;
     currentTrack.value = null;
     duration.value = 0;
   });
+
+  selectedFolder.value = await invoke<string | null>("get_library_folder");
+  if (selectedFolder.value) {
+    // Show the previous session's library immediately; the background scan
+    // (already running) will refresh it via `scan-finished`.
+    scanning.value = await invoke<boolean>("is_scanning");
+    await refreshLibrary();
+  } else {
+    // First launch with no library configured — prompt the user to pick one.
+    showSettings.value = true;
+  }
+
   posTimer = setInterval(async () => {
     if (currentTrack.value && isPlaying.value) {
       position.value = await invoke<number>("playback_position");
@@ -87,6 +100,13 @@ function formatTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+async function refreshLibrary() {
+  tracks.value = await invoke<Track[]>("get_library", {
+    sortBy: sortBy.value,
+    sortDir: sortDir.value,
+  });
+}
+
 async function selectMusicFolder() {
   const folder = await open({
     directory: true,
@@ -96,21 +116,17 @@ async function selectMusicFolder() {
   if (typeof folder !== "string") return;
 
   selectedFolder.value = folder;
-  loading.value = true;
-  try {
-    await invoke("set_library_folder", { folder });
-    await invoke("scan_library");
-    tracks.value = await invoke<Track[]>("get_library", {
-      sortBy: "artist",
-      sortDir: "asc",
-    });
-  } finally {
-    loading.value = false;
-  }
+  await invoke("set_library_folder", { folder });
+  // Kick off a background scan; `scan-started`/`scan-finished` drive the
+  // indicator and refresh the table when it completes.
+  scanning.value = true;
+  await invoke("scan_library");
 }
 
-async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
-  tracks.value = await invoke<Track[]>("get_library", { sortBy, sortDir });
+async function onSortChange(by: string, dir: "asc" | "desc") {
+  sortBy.value = by;
+  sortDir.value = dir;
+  await refreshLibrary();
 }
 </script>
 
@@ -118,6 +134,10 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
   <div class="app">
     <header class="toolbar">
       <h1>Jost Music Player</h1>
+      <span v-if="scanning" class="scanning-badge" title="Scanning library…">
+        <span class="scanning-dot"></span>
+        Scanning…
+      </span>
       <div class="transport">
         <button
           class="play-toggle"
@@ -135,7 +155,7 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
 
       <button
         class="cog-btn"
-        :class="{ spin: loading }"
+        :class="{ spin: scanning }"
         title="Settings"
         @click="showSettings = true"
       >
@@ -165,6 +185,7 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
       <TrackList
         :tracks="tracks"
         :playing-id="currentTrack?.id ?? null"
+        :scanning="scanning"
         @sort-change="onSortChange"
         @play-track="playTrack"
       />
@@ -173,7 +194,7 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
     <SettingsDialog
       v-if="showSettings"
       :selected-folder="selectedFolder"
-      :loading="loading"
+      :loading="scanning"
       @close="showSettings = false"
       @select-folder="selectMusicFolder"
     />
@@ -220,6 +241,35 @@ async function onSortChange(sortBy: string, sortDir: "asc" | "desc") {
   font-size: 1.1rem;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.scanning-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75em;
+  color: #666;
+  white-space: nowrap;
+}
+
+.scanning-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #396cd8;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
 }
 
 .cog-btn {
@@ -390,7 +440,8 @@ button:disabled {
   }
 
   .np-artist,
-  .time {
+  .time,
+  .scanning-badge {
     color: #aaa;
   }
 

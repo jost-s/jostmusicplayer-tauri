@@ -1,12 +1,14 @@
 mod db;
+mod opus_source;
 mod player;
 mod scanner;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Serialize)]
 pub struct Track {
@@ -29,6 +31,32 @@ struct Config {
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub config_path: PathBuf,
+    /// True while a background library scan is running. Lets the frontend show a
+    /// scanning indicator even if it mounts after a startup scan has begun.
+    pub scanning: AtomicBool,
+}
+
+/// Run a library scan on a background thread, emitting `scan-started` and
+/// `scan-finished` so the frontend can show progress and refresh when done.
+/// No-ops if no library folder is configured or a scan is already running.
+fn spawn_scan(app: AppHandle) {
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+
+        // Guard against overlapping scans clobbering each other's DB sync.
+        if state.scanning.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        if let Some(folder) = read_config(&state.config_path).library_folder {
+            let _ = app.emit("scan-started", ());
+            scanner::scan_and_sync(&state.db, &folder);
+            state.scanning.store(false, Ordering::SeqCst);
+            let _ = app.emit("scan-finished", ());
+        } else {
+            state.scanning.store(false, Ordering::SeqCst);
+        }
+    });
 }
 
 fn read_config(path: &PathBuf) -> Config {
@@ -58,12 +86,13 @@ fn set_library_folder(folder: String, state: State<AppState>) {
 }
 
 #[tauri::command]
-fn scan_library(state: State<AppState>) -> Result<(), String> {
-    let config = read_config(&state.config_path);
-    let folder = config.library_folder.ok_or("no library folder set")?;
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    scanner::scan_and_sync(&conn, &folder);
-    Ok(())
+fn scan_library(app: AppHandle) {
+    spawn_scan(app);
+}
+
+#[tauri::command]
+fn is_scanning(state: State<AppState>) -> bool {
+    state.scanning.load(Ordering::SeqCst)
 }
 
 #[tauri::command]
@@ -109,18 +138,21 @@ pub fn run() {
             db::init_schema(&conn).expect("failed to init db schema");
 
             let config_path = app_data_dir.join("config.json");
-            let config = read_config(&config_path);
-
-            if let Some(ref folder) = config.library_folder {
-                scanner::scan_and_sync(&conn, folder);
-            }
+            let has_folder = read_config(&config_path).library_folder.is_some();
 
             app.manage(AppState {
                 db: Mutex::new(conn),
                 config_path,
+                scanning: AtomicBool::new(false),
             });
 
             app.manage(player::AudioPlayer::new(app.handle().clone()));
+
+            // Re-scan the saved library in the background so the window appears
+            // instantly; the frontend listens for `scan-finished` to refresh.
+            if has_folder {
+                spawn_scan(app.handle().clone());
+            }
 
             Ok(())
         })
@@ -128,6 +160,7 @@ pub fn run() {
             get_library_folder,
             set_library_folder,
             scan_library,
+            is_scanning,
             get_library,
             play_track,
             toggle_playback,

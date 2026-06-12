@@ -1,0 +1,6 @@
+# audiopus_sys builds a vendored libopus whose CMakeLists declares a policy
+# minimum below 3.5; CMake 4+ rejects that. This env var tells CMake to assume
+# the 3.5 policy set so the bundled build configures. Applies to all cargo
+# invocations in this crate (including `npm run tauri dev`).
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

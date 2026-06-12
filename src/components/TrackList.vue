@@ -13,7 +13,11 @@ export interface Track {
   duration: number | null;
 }
 
-const props = defineProps<{ tracks: Track[]; playingId: number | null }>();
+const props = defineProps<{
+  tracks: Track[];
+  playingId: number | null;
+  scanning?: boolean;
+}>();
 const emit = defineEmits<{
   "sort-change": [sortBy: string, sortDir: "asc" | "desc"];
   "play-track": [track: Track];
@@ -69,7 +73,9 @@ const COLUMNS: { key: string; label: string }[] = [
       </thead>
       <tbody>
         <tr v-if="props.tracks.length === 0">
-          <td colspan="6" class="empty">No tracks found.</td>
+          <td colspan="6" class="empty">
+            {{ props.scanning ? "Scanning…" : "No tracks found." }}
+          </td>
         </tr>
         <tr
           v-for="track in props.tracks"
