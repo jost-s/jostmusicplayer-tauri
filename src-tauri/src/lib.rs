@@ -97,7 +97,11 @@ fn is_scanning(state: State<AppState>) -> bool {
 }
 
 #[tauri::command]
-fn get_library(sort_by: String, sort_dir: String, state: State<AppState>) -> Result<Vec<Track>, String> {
+fn get_library(
+    sort_by: String,
+    sort_dir: String,
+    state: State<AppState>,
+) -> Result<Vec<Track>, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     db::get_tracks(&conn, &sort_by, &sort_dir).map_err(|e| e.to_string())
 }

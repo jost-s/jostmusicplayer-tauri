@@ -431,7 +431,10 @@ mod tests {
         // The 1-second fixture should yield roughly 48k frames; just assert we
         // get a substantial, non-empty run of decoded samples.
         let count = source.by_ref().take(200_000).count();
-        assert!(count > channels * 40_000, "decoded too few samples: {count}");
+        assert!(
+            count > channels * 40_000,
+            "decoded too few samples: {count}"
+        );
     }
 
     #[test]
@@ -499,13 +502,17 @@ mod tests {
         sink.try_seek(Duration::from_secs(90)).unwrap();
         eprintln!("sink seek call returned in {:?}", t.elapsed());
         std::thread::sleep(Duration::from_millis(200));
-        eprintln!("pos before {before:?}, after seek+200ms {:?}", sink.get_pos());
+        eprintln!(
+            "pos before {before:?}, after seek+200ms {:?}",
+            sink.get_pos()
+        );
     }
 
     #[test]
     fn granule_seek_lands_accurately() {
-        let mut source =
-            OpusSource::new(&fixture("long.opus")).unwrap().with_total_duration(Some(120.0));
+        let mut source = OpusSource::new(&fixture("long.opus"))
+            .unwrap()
+            .with_total_duration(Some(120.0));
         let ch = source.channels() as u64;
 
         // Seek far forward into the 120s stream.
@@ -526,8 +533,9 @@ mod tests {
         // Tone fixture: a click at the splice shows up as a large jump between
         // consecutive output samples (a 440 Hz tone steps by ~2k at most; a raw
         // splice would jump tens of thousands).
-        let mut source =
-            OpusSource::new(&fixture("tone.opus")).unwrap().with_total_duration(Some(5.0));
+        let mut source = OpusSource::new(&fixture("tone.opus"))
+            .unwrap()
+            .with_total_duration(Some(5.0));
         let ch = source.channels() as usize;
 
         // Play ~1s so there is real audio to crossfade out of, then seek away.
@@ -544,19 +552,26 @@ mod tests {
             .map(|w| (w[0] as i32 - w[1] as i32).abs())
             .max()
             .unwrap();
-        assert!(max_step < 10_000, "discontinuity of {max_step} suggests a click");
+        assert!(
+            max_step < 10_000,
+            "discontinuity of {max_step} suggests a click"
+        );
     }
 
     #[test]
     fn granule_seek_is_cheap() {
         // A far seek must not decode the whole gap (that was ~400ms and stalled
         // the audio thread). Granule bisection keeps it well under that.
-        let mut source =
-            OpusSource::new(&fixture("long.opus")).unwrap().with_total_duration(Some(120.0));
+        let mut source = OpusSource::new(&fixture("long.opus"))
+            .unwrap()
+            .with_total_duration(Some(120.0));
         let start = std::time::Instant::now();
         source.try_seek(Duration::from_secs(115)).unwrap();
         let elapsed = start.elapsed();
-        assert!(elapsed < Duration::from_millis(150), "seek took {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "seek took {elapsed:?}"
+        );
     }
 
     #[test]

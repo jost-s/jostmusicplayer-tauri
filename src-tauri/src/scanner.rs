@@ -52,7 +52,10 @@ fn read_tags(path: &Path) -> TagData {
     let duration = (secs > 0).then_some(secs as u32);
 
     // Prefer the file's primary tag, falling back to whatever tag exists.
-    match tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+    match tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag())
+    {
         Some(tag) => TagData {
             title: tag.title().map(|c| c.into_owned()),
             artist: tag.artist().map(|c| c.into_owned()),
@@ -149,11 +152,11 @@ mod tests {
     /// title="My Song", artist="My Artist") into `dir` under `name`.
     /// `name`'s extension selects the fixture format (mp3 or opus).
     fn copy_tagged_fixture(dir: &TempDir, name: &str) -> std::path::PathBuf {
-        let ext = Path::new(name).extension().and_then(|e| e.to_str()).unwrap();
-        let fixture = format!(
-            "{}/tests/fixtures/tagged.{ext}",
-            env!("CARGO_MANIFEST_DIR")
-        );
+        let ext = Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap();
+        let fixture = format!("{}/tests/fixtures/tagged.{ext}", env!("CARGO_MANIFEST_DIR"));
         let path = dir.path().join(name);
         fs::copy(&fixture, &path).unwrap();
         path
@@ -261,11 +264,16 @@ mod tests {
 
         let db = open_db();
         scan_and_sync(&db, dir.path().to_str().unwrap());
-        assert_eq!(crate::db::get_all_paths(&db.lock().unwrap()).unwrap().len(), 1);
+        assert_eq!(
+            crate::db::get_all_paths(&db.lock().unwrap()).unwrap().len(),
+            1
+        );
 
         fs::remove_file(&path).unwrap();
         scan_and_sync(&db, dir.path().to_str().unwrap());
-        assert!(crate::db::get_all_paths(&db.lock().unwrap()).unwrap().is_empty());
+        assert!(crate::db::get_all_paths(&db.lock().unwrap())
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -278,7 +286,10 @@ mod tests {
         let db = open_db();
         scan_and_sync(&db, dir.path().to_str().unwrap());
 
-        assert_eq!(crate::db::get_all_paths(&db.lock().unwrap()).unwrap().len(), 1);
+        assert_eq!(
+            crate::db::get_all_paths(&db.lock().unwrap()).unwrap().len(),
+            1
+        );
     }
 
     #[test]

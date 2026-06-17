@@ -286,7 +286,10 @@ mod tests {
 
         // The ~1s fixture should yield a substantial run of decoded samples.
         let count = source.by_ref().take(200_000).count();
-        assert!(count > channels * 30_000, "decoded too few samples: {count}");
+        assert!(
+            count > channels * 30_000,
+            "decoded too few samples: {count}"
+        );
     }
 
     #[test]
@@ -345,6 +348,9 @@ mod tests {
         source.try_seek(Duration::from_secs(60)).unwrap();
         // A handful of trailing frames may remain; the source must end quickly.
         let remaining = source.by_ref().take(20_000).count();
-        assert!(remaining < 10_000, "expected near-EOF, got {remaining} samples");
+        assert!(
+            remaining < 10_000,
+            "expected near-EOF, got {remaining} samples"
+        );
     }
 }
