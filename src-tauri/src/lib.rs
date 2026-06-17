@@ -2,6 +2,7 @@ mod db;
 mod opus_source;
 mod player;
 mod scanner;
+mod symphonia_source;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};

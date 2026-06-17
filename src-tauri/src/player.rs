@@ -198,6 +198,18 @@ fn start_playback(
         let source = crate::opus_source::OpusSource::new(path)?.with_total_duration(total);
         new_sink.append(source);
         total
+    } else if has_extension(path, "m4a") || has_extension(path, "aac") {
+        // rodio's Decoder panics on these (its ReadSeekSource reports no length,
+        // which trips symphonia's MP4 demuxer during init), so use our own
+        // symphonia-backed source instead.
+        let source = crate::symphonia_source::SymphoniaSource::new(path)?;
+        let total = source
+            .total_duration()
+            .map(|d| d.as_secs_f64())
+            .filter(|&s| s > 0.0)
+            .or_else(|| probe_duration(path));
+        new_sink.append(source);
+        total
     } else {
         let file = File::open(path).map_err(|e| format!("failed to open file: {e}"))?;
         let source =
