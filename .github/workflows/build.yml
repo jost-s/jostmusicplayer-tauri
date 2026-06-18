@@ -1,0 +1,95 @@
+name: Build (dry-run)
+
+# Cross-platform packaging smoke test. Builds the installers on every supported
+# OS without publishing anything — run it manually before tagging a release, or
+# let it fire automatically when packaging-relevant files change.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/Cargo.lock"
+      - "src-tauri/tauri.conf.json"
+      - "src-tauri/.cargo/**"
+      - "src-tauri/rust-toolchain.toml"
+      - ".github/workflows/build.yml"
+      - ".github/workflows/release.yml"
+
+jobs:
+  build-tauri:
+    name: Build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS (Apple Silicon)
+            args: "--target aarch64-apple-darwin"
+          - os: macos-latest
+            label: macOS (Intel)
+            args: "--target x86_64-apple-darwin"
+          - os: ubuntu-22.04
+            label: Linux
+            args: ""
+          - os: windows-latest
+            label: Windows
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Rust toolchain
+        # rustup auto-installs the channel, components, and targets (including the
+        # two macOS triples) pinned in src-tauri/rust-toolchain.toml.
+        working-directory: src-tauri
+        run: rustup show
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            libasound2-dev \
+            cmake \
+            build-essential \
+            file \
+            patchelf
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        # No releaseId / tagName -> builds the bundles but publishes nothing.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.args }}
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundles-${{ matrix.label }}
+          # Covers both layouts: target/release/bundle (Linux, Windows — no
+          # --target) and target/<triple>/release/bundle (macOS legs).
+          path: |
+            src-tauri/target/release/bundle/**
+            src-tauri/target/*/release/bundle/**
+          if-no-files-found: error
+          retention-days: 7
