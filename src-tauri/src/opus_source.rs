@@ -145,7 +145,7 @@ impl OpusSource {
                 Ok(Some(p)) => p,
                 Ok(None) => return false,
                 Err(e) => {
-                    eprintln!("opus: ogg read error: {e}");
+                    log::error!("opus: ogg read error: {e}");
                     return false;
                 }
             };
@@ -158,7 +158,7 @@ impl OpusSource {
             let per_channel = match self.decoder.decode(Some(input), signals, false) {
                 Ok(n) => n,
                 Err(e) => {
-                    eprintln!("opus: decode error: {e}");
+                    log::error!("opus: decode error: {e}");
                     continue;
                 }
             };
@@ -229,7 +229,7 @@ impl OpusSource {
                     if let Ok(signals) = MutSignals::try_from(&mut self.scratch[..]) {
                         match self.decoder.decode(Some(input), signals, false) {
                             Ok(n) => self.buffer.extend_from_slice(&self.scratch[..n * ch]),
-                            Err(e) => eprintln!("opus: decode error during seek: {e}"),
+                            Err(e) => log::error!("opus: decode error during seek: {e}"),
                         }
                     }
                 }

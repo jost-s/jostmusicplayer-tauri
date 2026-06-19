@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use tauri::menu::{Menu, MenuItem};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Serialize)]
 pub struct Track {
@@ -126,16 +128,65 @@ fn seek(seconds: f64, player: State<player::AudioPlayer>) -> Result<(), String> 
     player.seek(seconds)
 }
 
+/// Open the directory holding the app's log file in the OS file manager, so logs
+/// can be inspected from the bundled app (which has no attached console).
+/// Triggered by the Help > Open Logs menu item.
+fn open_logs_dir(app: &AppHandle) -> Result<(), String> {
+    let log_dir = app.path().app_log_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
+    app.opener()
+        .open_path(log_dir.to_string_lossy(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    // File in the OS log dir so the bundled app's logs persist and
+                    // can be opened from the UI; stdout for `tauri dev`.
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                ])
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
+        .menu(|handle| {
+            // Start from Tauri's default menu (Quit, Edit, Window, Help, …) and
+            // add an "Open Logs" item to the existing Help submenu.
+            let menu = Menu::default(handle)?;
+            let open_logs =
+                MenuItem::with_id(handle, "open_logs", "Open Logs", true, None::<&str>)?;
+            if let Some(help) = menu.get(tauri::menu::HELP_SUBMENU_ID) {
+                if let Some(help) = help.as_submenu() {
+                    help.append(&open_logs)?;
+                }
+            }
+            Ok(menu)
+        })
+        .on_menu_event(|app, event| {
+            if event.id.as_ref() == "open_logs" {
+                if let Err(e) = open_logs_dir(app) {
+                    log::error!("failed to open logs dir: {e}");
+                }
+            }
+        })
         .setup(|app| {
-            let app_data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("failed to resolve app data dir");
+            // Dev runs (`npm run tauri dev`) keep their DB + config in an isolated
+            // temp dir so they never touch the production library data.
+            let app_data_dir = if cfg!(debug_assertions) {
+                std::env::temp_dir().join("jostmusicplayer-dev")
+            } else {
+                app.path()
+                    .app_data_dir()
+                    .expect("failed to resolve app data dir")
+            };
             std::fs::create_dir_all(&app_data_dir)?;
 
             let db_path = app_data_dir.join("library.db");

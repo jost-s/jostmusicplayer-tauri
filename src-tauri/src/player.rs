@@ -52,7 +52,7 @@ impl AudioPlayer {
             let (_stream, handle) = match OutputStream::try_default() {
                 Ok(pair) => pair,
                 Err(e) => {
-                    eprintln!("audio: failed to open output stream: {e}");
+                    log::error!("audio: failed to open output stream: {e}");
                     return;
                 }
             };
@@ -77,7 +77,7 @@ impl AudioPlayer {
                             Ok(Some(new_active)) => active = new_active,
                             Ok(None) => {}
                             Err(_) => {
-                                eprintln!("audio: command handler panicked; dropping track");
+                                log::error!("audio: command handler panicked; dropping track");
                                 sink = None;
                                 active = false;
                             }
