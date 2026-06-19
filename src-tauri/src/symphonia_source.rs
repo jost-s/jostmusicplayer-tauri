@@ -128,7 +128,7 @@ impl SymphoniaSource {
             match self.decoder.decode(&packet) {
                 Ok(decoded) => break decoded,
                 Err(SymphoniaError::DecodeError(e)) => {
-                    eprintln!("aac: decode error: {e}");
+                    log::error!("aac: decode error: {e}");
                     decode_errors += 1;
                     if decode_errors > MAX_DECODE_RETRIES {
                         return false;

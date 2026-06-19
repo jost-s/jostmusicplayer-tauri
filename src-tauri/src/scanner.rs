@@ -42,7 +42,7 @@ fn read_tags(path: &Path) -> TagData {
     let tagged_file = match lofty::read_from_path(path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("scanner: failed to read tags for {}: {e}", path.display());
+            log::warn!("scanner: failed to read tags for {}: {e}", path.display());
             return EMPTY_TAGS;
         }
     };
@@ -102,7 +102,7 @@ pub fn scan_and_sync(db: &Mutex<Connection>, folder: &str) {
     for path_str in disk_paths.difference(&db_paths) {
         let path = Path::new(path_str);
         let Some(filename) = path.file_name().and_then(|n| n.to_str()) else {
-            eprintln!("scanner: skipping path with invalid filename: {path_str}");
+            log::warn!("scanner: skipping path with invalid filename: {path_str}");
             continue;
         };
         let filename = filename.to_owned();
