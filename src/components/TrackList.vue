@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 
 export interface Track {
   id: number;
@@ -51,11 +51,63 @@ const COLUMNS: { key: string; label: string }[] = [
   { key: "year", label: "Year" },
   { key: "duration", label: "Duration" },
 ];
+
+// Virtualized rendering: only the rows in (and just around) the viewport exist in
+// the DOM. Without this, large libraries put tens of thousands of <tr>s on the
+// page, and any style change — notably toggling the `playing` highlight — forces
+// the engine to recalc/reflow the whole table, which can stall for seconds.
+// Fixed-height rows let us map scroll position to a slice with simple arithmetic.
+const ROW_HEIGHT = 32; // px; must match `tbody tr` height in the stylesheet
+const OVERSCAN = 8; // extra rows above/below the viewport to avoid blank edges
+
+const scroller = ref<HTMLElement | null>(null);
+const scrollTop = ref(0);
+const viewportHeight = ref(0);
+
+const startIndex = computed(() =>
+  Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN),
+);
+const endIndex = computed(() =>
+  Math.min(
+    props.tracks.length,
+    Math.ceil((scrollTop.value + viewportHeight.value) / ROW_HEIGHT) + OVERSCAN,
+  ),
+);
+const visibleTracks = computed(() => props.tracks.slice(startIndex.value, endIndex.value));
+// Spacer heights stand in for the rows we don't render, keeping the scrollbar and
+// total height correct.
+const topPad = computed(() => startIndex.value * ROW_HEIGHT);
+const bottomPad = computed(() => (props.tracks.length - endIndex.value) * ROW_HEIGHT);
+
+function onScroll() {
+  if (scroller.value) scrollTop.value = scroller.value.scrollTop;
+}
+
+let resizeObserver: ResizeObserver | undefined;
+onMounted(() => {
+  if (!scroller.value) return;
+  viewportHeight.value = scroller.value.clientHeight;
+  resizeObserver = new ResizeObserver(() => {
+    if (scroller.value) viewportHeight.value = scroller.value.clientHeight;
+  });
+  resizeObserver.observe(scroller.value);
+});
+onBeforeUnmount(() => resizeObserver?.disconnect());
 </script>
 
 <template>
   <div class="track-list">
-    <table>
+    <!-- Header lives in its own table outside the scroll container, so a hovered
+         row scrolled to the top can't repaint over it (a WebKit sticky-header
+         bug). Both tables use identical fixed column widths to stay aligned. -->
+    <table class="header-table">
+      <colgroup>
+        <col
+          v-for="col in COLUMNS"
+          :key="col.key"
+          :class="`col-${col.key}`"
+        />
+      </colgroup>
       <thead>
         <tr>
           <th
@@ -71,27 +123,44 @@ const COLUMNS: { key: string; label: string }[] = [
           </th>
         </tr>
       </thead>
-      <tbody>
-        <tr v-if="props.tracks.length === 0">
-          <td colspan="6" class="empty">
-            {{ props.scanning ? "Scanning…" : "No tracks found." }}
-          </td>
-        </tr>
-        <tr
-          v-for="track in props.tracks"
-          :key="track.id"
-          :class="{ playing: track.id === props.playingId }"
-          @dblclick="emit('play-track', track)"
-        >
-          <td class="num">{{ track.track_num ?? "—" }}</td>
-          <td class="title">{{ track.title ?? track.filename }}</td>
-          <td>{{ track.artist ?? "—" }}</td>
-          <td>{{ track.album ?? "—" }}</td>
-          <td class="num">{{ track.year ?? "—" }}</td>
-          <td class="num">{{ formatDuration(track.duration) }}</td>
-        </tr>
-      </tbody>
     </table>
+    <div ref="scroller" class="body-scroll" @scroll="onScroll">
+      <table class="body-table">
+        <colgroup>
+          <col
+            v-for="col in COLUMNS"
+            :key="col.key"
+            :class="`col-${col.key}`"
+          />
+        </colgroup>
+        <tbody>
+          <tr v-if="props.tracks.length === 0">
+            <td colspan="6" class="empty">
+              {{ props.scanning ? "Scanning…" : "No tracks found." }}
+            </td>
+          </tr>
+          <tr v-if="topPad > 0" class="spacer" :style="{ height: topPad + 'px' }">
+            <td colspan="6"></td>
+          </tr>
+          <tr
+            v-for="track in visibleTracks"
+            :key="track.id"
+            :class="{ playing: track.id === props.playingId }"
+            @dblclick="emit('play-track', track)"
+          >
+            <td class="num">{{ track.track_num ?? "—" }}</td>
+            <td class="title">{{ track.title ?? track.filename }}</td>
+            <td>{{ track.artist ?? "—" }}</td>
+            <td>{{ track.album ?? "—" }}</td>
+            <td class="num">{{ track.year ?? "—" }}</td>
+            <td class="num">{{ formatDuration(track.duration) }}</td>
+          </tr>
+          <tr v-if="bottomPad > 0" class="spacer" :style="{ height: bottomPad + 'px' }">
+            <td colspan="6"></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>
 
@@ -99,20 +168,47 @@ const COLUMNS: { key: string; label: string }[] = [
 .track-list {
   width: 100%;
   height: 100%;
+  /* Column layout: fixed header on top, scrolling body fills the rest. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.body-scroll {
+  flex: 1;
   overflow: auto;
 }
 
 table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.9em;
+  /* Fixed layout keeps column widths stable as the virtualized row slice changes
+     (with `auto` they'd jump because only a subset of rows is measured) and keeps
+     the separate header and body tables aligned to identical column widths. */
+  table-layout: fixed;
+}
+
+.col-track_num {
+  width: 56px;
+}
+.col-title {
+  width: 34%;
+}
+.col-artist,
+.col-album {
+  width: 26%;
+}
+.col-year {
+  width: 64px;
+}
+.col-duration {
+  width: 88px;
 }
 
 thead th {
-  position: sticky;
-  top: 0;
   background-color: #f6f6f6;
-  z-index: 1;
   text-align: left;
   padding: 0.5rem 0.75rem;
   border-bottom: 2px solid #ccc;
@@ -137,10 +233,23 @@ thead th.active {
 tbody tr {
   cursor: default;
   user-select: none;
+  /* Must equal ROW_HEIGHT in the script for the virtual-scroll math to line up. */
+  height: 32px;
 }
 
 tbody tr:hover {
   background-color: rgba(0, 0, 0, 0.04);
+}
+
+/* Empty rows that pad the scroll height for the off-screen (unrendered) tracks. */
+tbody tr.spacer,
+tbody tr.spacer:hover {
+  background: none;
+}
+
+tbody tr.spacer td {
+  padding: 0;
+  border: 0;
 }
 
 tbody tr.playing {
@@ -152,12 +261,13 @@ tbody tr.playing td.title {
 }
 
 tbody td {
-  padding: 0.4rem 0.75rem;
+  /* No vertical padding: the fixed 32px row height (above) controls row size, and
+     extra padding would push content past it and break the virtual-scroll math. */
+  padding: 0 0.75rem;
   border-bottom: 1px solid #eee;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 240px;
 }
 
 td.num {
