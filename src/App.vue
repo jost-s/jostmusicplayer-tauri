@@ -41,11 +41,8 @@ onMounted(async () => {
     scanning.value = false;
     await refreshLibrary();
   });
-  await listen("playback-ended", () => {
-    isPlaying.value = false;
-    position.value = 0;
-    currentTrack.value = null;
-    duration.value = 0;
+  await listen("playback-ended", async () => {
+    await playNext();
   });
 
   selectedFolder.value = await invoke<string | null>("get_library_folder");
@@ -77,6 +74,23 @@ async function playTrack(track: Track) {
   position.value = 0;
   // Prefer the duration the decoder reports; fall back to the scanned tag length.
   duration.value = total ?? track.duration ?? 0;
+}
+
+// Called when a track finishes on its own: continue with whatever is currently
+// shown in the table (respecting the active sort/filter), advancing to the row
+// after the one that just played. Stops if there's nothing after it.
+async function playNext() {
+  const current = currentTrack.value;
+  const idx = current ? tracks.value.findIndex((t) => t.id === current.id) : -1;
+  const next = idx >= 0 ? tracks.value[idx + 1] : undefined;
+  if (next) {
+    await playTrack(next);
+  } else {
+    isPlaying.value = false;
+    position.value = 0;
+    currentTrack.value = null;
+    duration.value = 0;
+  }
 }
 
 async function togglePlayback() {
