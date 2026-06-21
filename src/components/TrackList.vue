@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from "vue";
 
 export interface Track {
   id: number;
@@ -33,6 +33,9 @@ function toggleSort(col: string) {
     sortBy.value = col;
     sortDir.value = "asc";
   }
+  // The re-sorted list arrives asynchronously via the `tracks` prop; remember
+  // that the user just sorted so we can scroll to the playing track once it does.
+  scrollToPlayingPending = true;
   emit("sort-change", sortBy.value, sortDir.value);
 }
 
@@ -82,6 +85,30 @@ const bottomPad = computed(() => (props.tracks.length - endIndex.value) * ROW_HE
 function onScroll() {
   if (scroller.value) scrollTop.value = scroller.value.scrollTop;
 }
+
+// Set when the user toggles a column header; consumed once the re-sorted `tracks`
+// prop lands so we scroll the now-playing track into view at its new position.
+let scrollToPlayingPending = false;
+
+function scrollPlayingIntoView() {
+  if (props.playingId == null || !scroller.value) return;
+  const index = props.tracks.findIndex((t) => t.id === props.playingId);
+  if (index < 0) return;
+  // Center the row in the viewport when possible, clamped to valid scroll range.
+  const maxTop = Math.max(0, props.tracks.length * ROW_HEIGHT - viewportHeight.value);
+  const target = index * ROW_HEIGHT - (viewportHeight.value - ROW_HEIGHT) / 2;
+  scroller.value.scrollTop = Math.min(maxTop, Math.max(0, target));
+}
+
+watch(
+  () => props.tracks,
+  async () => {
+    if (!scrollToPlayingPending) return;
+    scrollToPlayingPending = false;
+    await nextTick();
+    scrollPlayingIntoView();
+  },
+);
 
 let resizeObserver: ResizeObserver | undefined;
 onMounted(() => {
