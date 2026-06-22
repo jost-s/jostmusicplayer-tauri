@@ -40,3 +40,9 @@ symphonia = { version = "0.5", features = ["aac", "isomp4"] }
 [dev-dependencies]
 tempfile = "3"
 
+[profile.release]
+# strip = true # drop symbols from the binary
+lto = true # whole-program optimization shrinks (and speeds) the binary
+# NOTE: deliberately *not* setting `panic = "abort"`. The audio thread relies on
+# `std::panic::catch_unwind` (see player.rs) to recover when a decoder panics on a
+# malformed file; aborting would take the whole app down instead.
