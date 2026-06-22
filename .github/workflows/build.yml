@@ -1,10 +1,19 @@
 name: Build
 
-# Cross-platform packaging smoke test. Builds the installers on every supported
-# OS without publishing anything — run it manually before tagging a release, or
-# let it fire automatically when packaging-relevant files change.
+# Cross-platform packaging job, used two ways:
+#   * standalone (manual dispatch / PRs) as a smoke test — uploads the installers
+#     as workflow artifacts and publishes nothing;
+#   * called by release.yml as a reusable workflow — when given `release_id` it
+#     uploads the bundles straight to that GitHub release instead of as artifacts.
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_id:
+        description: "If set, upload bundles to this release instead of as artifacts."
+        type: string
+        required: false
+        default: ""
   pull_request:
     branches: [main]
     paths:
@@ -19,6 +28,10 @@ on:
 jobs:
   build-tauri:
     name: Build ${{ matrix.label }}
+    # Lets tauri-action upload to a release when called with a release_id; unused
+    # but harmless on the artifact-only dry-run path.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -74,15 +87,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Tauri bundles
+      - name: Build and upload Tauri bundles
         uses: tauri-apps/tauri-action@v0
-        # No releaseId / tagName -> builds the bundles but publishes nothing.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # Empty on the dry-run path -> just builds; set by release.yml -> uploads
+          # the bundles to that release.
+          releaseId: ${{ inputs.release_id }}
           args: ${{ matrix.args }}
 
+      # Dry-run only (no release_id): keep the bundles as inspectable artifacts.
       - name: Upload bundles
+        if: ${{ !inputs.release_id }}
         uses: actions/upload-artifact@v7
         with:
           name: bundles-${{ matrix.label }}

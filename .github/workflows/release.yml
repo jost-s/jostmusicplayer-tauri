@@ -1,6 +1,7 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -27,67 +28,31 @@ jobs:
           prerelease: false
 
   build-tauri:
-    name: Build ${{ matrix.label }}
+    name: Build bundles
     needs: create-release
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            label: macOS (Apple Silicon)
-            args: "--target aarch64-apple-darwin"
-          - os: macos-latest
-            label: macOS (Intel)
-            args: "--target x86_64-apple-darwin"
-          - os: ubuntu-22.04
-            label: Linux
-            args: ""
-          - os: windows-latest
-            label: Windows
-            args: ""
-    runs-on: ${{ matrix.os }}
+    # Reuse the matrix build from build.yml, passing the draft release's id so the
+    # shared job uploads the bundles to it instead of as workflow artifacts. The
+    # GITHUB_TOKEN needs contents: write to attach assets (the called job requests
+    # it too, but the caller must grant it).
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build.yml
+    with:
+      release_id: ${{ needs.create-release.outputs.release_id }}
+
+  publish-release:
+    name: Publish release
+    needs: [create-release, build-tauri]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
+      - uses: actions/github-script@v9
         with:
-          node-version: 20
-          cache: npm
-
-      - name: Install Rust toolchain
-        # rustup auto-installs the channel, components, and targets (including the
-        # two macOS triples) pinned in src-tauri/rust-toolchain.toml.
-        working-directory: src-tauri
-        run: rustup show
-
-      - name: Cache Rust build
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            librsvg2-dev \
-            libayatana-appindicator3-dev \
-            libasound2-dev \
-            cmake \
-            build-essential \
-            file \
-            patchelf
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build and upload Tauri bundles
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: ${{ matrix.args }}
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: ${{ needs.create-release.outputs.release_id }},
+              draft: false,
+            });
