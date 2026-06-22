@@ -1,4 +1,4 @@
-name: Build (dry-run)
+name: Build
 
 # Cross-platform packaging smoke test. Builds the installers on every supported
 # OS without publishing anything — run it manually before tagging a release, or
@@ -86,10 +86,19 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: bundles-${{ matrix.label }}
+          # Only the finished installers — NOT the uncompressed staging trees the
+          # bundlers leave behind (e.g. appimage/*.AppDir, deb/<pkg>/), which are
+          # full second copies of the bundled runtime and balloon the upload.
           # Covers both layouts: target/release/bundle (Linux, Windows — no
-          # --target) and target/<triple>/release/bundle (macOS legs).
+          # --target) and target/<triple>/release/bundle (macOS legs). Patterns
+          # that match nothing on a given OS are simply ignored.
           path: |
-            src-tauri/target/release/bundle/**
-            src-tauri/target/*/release/bundle/**
+            src-tauri/target/*/release/bundle/dmg/*.dmg
+            src-tauri/target/*/release/bundle/macos/*.app
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 7
