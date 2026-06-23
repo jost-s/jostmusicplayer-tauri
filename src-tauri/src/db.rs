@@ -10,6 +10,7 @@ pub struct TrackRow {
     pub year: Option<i32>,
     pub track_num: Option<u32>,
     pub duration: Option<u32>,
+    pub genre: Option<String>,
 }
 
 pub fn init_schema(conn: &Connection) -> Result<()> {
@@ -23,9 +24,25 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             album     TEXT,
             year      INTEGER,
             track_num INTEGER,
-            duration  INTEGER
+            duration  INTEGER,
+            genre     TEXT
         );",
-    )
+    )?;
+    // Migrate databases created before the genre column existed.
+    add_column_if_missing(conn, "genre", "TEXT")?;
+    Ok(())
+}
+
+/// Add a column to `tracks` if it isn't already there. SQLite has no
+/// `ADD COLUMN IF NOT EXISTS`, so we consult `pragma_table_info` first.
+fn add_column_if_missing(conn: &Connection, name: &str, decl: &str) -> Result<()> {
+    let present = conn
+        .prepare("SELECT 1 FROM pragma_table_info('tracks') WHERE name = ?1")?
+        .exists([name])?;
+    if !present {
+        conn.execute(&format!("ALTER TABLE tracks ADD COLUMN {name} {decl}"), [])?;
+    }
+    Ok(())
 }
 
 pub fn get_all_paths(conn: &Connection) -> Result<HashSet<String>> {
@@ -38,8 +55,8 @@ pub fn get_all_paths(conn: &Connection) -> Result<HashSet<String>> {
 
 pub fn upsert_track(conn: &Connection, track: &TrackRow) -> Result<()> {
     conn.execute(
-        "INSERT INTO tracks (path, filename, title, artist, album, year, track_num, duration)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO tracks (path, filename, title, artist, album, year, track_num, duration, genre)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(path) DO UPDATE SET
              filename  = excluded.filename,
              title     = excluded.title,
@@ -47,7 +64,8 @@ pub fn upsert_track(conn: &Connection, track: &TrackRow) -> Result<()> {
              album     = excluded.album,
              year      = excluded.year,
              track_num = excluded.track_num,
-             duration  = excluded.duration",
+             duration  = excluded.duration,
+             genre     = excluded.genre",
         params![
             track.path,
             track.filename,
@@ -57,6 +75,7 @@ pub fn upsert_track(conn: &Connection, track: &TrackRow) -> Result<()> {
             track.year,
             track.track_num,
             track.duration,
+            track.genre,
         ],
     )?;
     Ok(())
@@ -83,7 +102,7 @@ pub fn get_tracks(conn: &Connection, sort_by: &str, sort_dir: &str) -> Result<Ve
     };
 
     let sql = format!(
-        "SELECT id, path, filename, title, artist, album, year, track_num, duration
+        "SELECT id, path, filename, title, artist, album, year, track_num, duration, genre
          FROM tracks
          ORDER BY CASE WHEN {col} IS NULL THEN 1 ELSE 0 END, {col} {direction} {second_sort_order}"
     );
@@ -101,6 +120,7 @@ pub fn get_tracks(conn: &Connection, sort_by: &str, sort_dir: &str) -> Result<Ve
                 year: row.get(6)?,
                 track_num: row.get(7)?,
                 duration: row.get(8)?,
+                genre: row.get(9)?,
             })
         })?
         .collect::<Result<Vec<_>>>();
@@ -127,6 +147,7 @@ mod tests {
             year: Some(2024),
             track_num: Some(1),
             duration: Some(240),
+            genre: Some("Rock".to_owned()),
         }
     }
 
@@ -179,6 +200,7 @@ mod tests {
                 year: None,
                 track_num: None,
                 duration: None,
+                genre: None,
             },
         )
         .unwrap();
@@ -212,6 +234,7 @@ mod tests {
                 year: None,
                 track_num: None,
                 duration: None,
+                genre: None,
             },
         )
         .unwrap();
@@ -226,6 +249,7 @@ mod tests {
                 year: None,
                 track_num: None,
                 duration: None,
+                genre: None,
             },
         )
         .unwrap();
@@ -251,6 +275,7 @@ mod tests {
                 year: None,
                 track_num: None,
                 duration: None,
+                genre: None,
             },
         )
         .unwrap();
@@ -265,6 +290,7 @@ mod tests {
                 year: None,
                 track_num: None,
                 duration: None,
+                genre: None,
             },
         )
         .unwrap();
@@ -297,6 +323,7 @@ mod tests {
                 year: None,
                 track_num: Some(2),
                 duration: None,
+                genre: None,
             },
         )
         .unwrap();
@@ -311,6 +338,7 @@ mod tests {
                 year: None,
                 track_num: Some(1),
                 duration: None,
+                genre: None,
             },
         )
         .unwrap();

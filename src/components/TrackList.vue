@@ -11,6 +11,7 @@ export interface Track {
   year: number | null;
   track_num: number | null;
   duration: number | null;
+  genre: string | null;
 }
 
 const props = defineProps<{
@@ -103,10 +104,16 @@ function scrollPlayingIntoView() {
 watch(
   () => props.tracks,
   async () => {
-    if (!scrollToPlayingPending) return;
-    scrollToPlayingPending = false;
     await nextTick();
-    scrollPlayingIntoView();
+    if (scrollToPlayingPending) {
+      scrollToPlayingPending = false;
+      scrollPlayingIntoView();
+    } else if (scroller.value) {
+      // A new result set (search/filter change or library refresh): start at the
+      // top, otherwise the visible window can be stranded past the shorter list.
+      scroller.value.scrollTop = 0;
+      scrollTop.value = 0;
+    }
   },
 );
 

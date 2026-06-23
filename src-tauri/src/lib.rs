@@ -24,6 +24,7 @@ pub struct Track {
     pub year: Option<i32>,
     pub track_num: Option<i64>,
     pub duration: Option<i64>,
+    pub genre: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

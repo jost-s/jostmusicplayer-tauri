@@ -24,6 +24,7 @@ struct TagData {
     year: Option<i32>,
     track_num: Option<u32>,
     duration: Option<u32>,
+    genre: Option<String>,
 }
 
 const EMPTY_TAGS: TagData = TagData {
@@ -33,6 +34,7 @@ const EMPTY_TAGS: TagData = TagData {
     year: None,
     track_num: None,
     duration: None,
+    genre: None,
 };
 
 /// Read metadata from any format lofty understands (MP3 ID3, Opus/Ogg Vorbis
@@ -63,6 +65,7 @@ fn read_tags(path: &Path) -> TagData {
             year: tag.year().map(|y| y as i32),
             track_num: tag.track(),
             duration,
+            genre: tag.genre().map(|c| c.into_owned()),
         },
         None => TagData {
             duration,
@@ -117,6 +120,7 @@ pub fn scan_and_sync(db: &Mutex<Connection>, folder: &str) {
             year: tags.year,
             track_num: tags.track_num,
             duration: tags.duration,
+            genre: tags.genre,
         };
         let Ok(conn) = db.lock() else { return };
         let _ = crate::db::upsert_track(&conn, &row);
