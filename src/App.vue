@@ -163,6 +163,12 @@ onMounted(async () => {
     }),
   );
   unlisteners.push(
+    await listen("scan-progress", () => {
+      // Surface newly-indexed tracks while the scan is still running.
+      void refreshLibrary();
+    }),
+  );
+  unlisteners.push(
     await listen("scan-finished", async () => {
       scanning.value = false;
       await refreshLibrary();
@@ -245,11 +251,29 @@ function formatTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+// Coalesce overlapping refreshes. Progress events during a scan can arrive
+// faster than `get_library` returns; rather than stack queries, we run one at a
+// time and remember whether another was requested, then run a single final pass
+// so the table always converges to the latest DB state.
+let refreshInFlight = false;
+let refreshPending = false;
 async function refreshLibrary() {
-  tracks.value = await invoke<Track[]>("get_library", {
-    sortBy: sortBy.value,
-    sortDir: sortDir.value,
-  });
+  if (refreshInFlight) {
+    refreshPending = true;
+    return;
+  }
+  refreshInFlight = true;
+  try {
+    do {
+      refreshPending = false;
+      tracks.value = await invoke<Track[]>("get_library", {
+        sortBy: sortBy.value,
+        sortDir: sortDir.value,
+      });
+    } while (refreshPending);
+  } finally {
+    refreshInFlight = false;
+  }
 }
 
 async function selectMusicFolder() {
@@ -298,12 +322,7 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
         </div>
       </div>
 
-      <button
-        class="cog-btn"
-        :class="{ spin: scanning }"
-        title="Settings"
-        @click="showSettings = true"
-      >
+      <button class="cog-btn" title="Settings" @click="showSettings = true">
         ⚙
       </button>
     </header>
@@ -447,16 +466,6 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
   font-size: 1.1em;
   line-height: 1;
   margin-left: auto;
-}
-
-.cog-btn.spin {
-  animation: spin 1.5s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .transport {

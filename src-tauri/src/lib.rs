@@ -54,7 +54,9 @@ fn spawn_scan(app: AppHandle) {
 
         if let Some(folder) = read_config(&state.config_path).library_folder {
             let _ = app.emit("scan-started", ());
-            scanner::scan_and_sync(&state.db, &folder);
+            scanner::scan_and_sync(&state.db, &folder, || {
+                let _ = app.emit("scan-progress", ());
+            });
             state.scanning.store(false, Ordering::SeqCst);
             let _ = app.emit("scan-finished", ());
         } else {

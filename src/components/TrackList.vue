@@ -109,10 +109,16 @@ watch(
       scrollToPlayingPending = false;
       scrollPlayingIntoView();
     } else if (scroller.value) {
-      // A new result set (search/filter change or library refresh): start at the
-      // top, otherwise the visible window can be stranded past the shorter list.
-      scroller.value.scrollTop = 0;
-      scrollTop.value = 0;
+      // Preserve the user's scroll position across refreshes — notably the
+      // progressive updates emitted while a scan runs, which would otherwise keep
+      // snapping back to the top. Only clamp when the new (possibly shorter) list
+      // no longer reaches the current offset, so the viewport can't be stranded
+      // past the end.
+      const maxTop = Math.max(0, props.tracks.length * ROW_HEIGHT - viewportHeight.value);
+      if (scroller.value.scrollTop > maxTop) {
+        scroller.value.scrollTop = maxTop;
+        scrollTop.value = maxTop;
+      }
     }
   },
 );

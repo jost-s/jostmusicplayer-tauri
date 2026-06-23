@@ -74,6 +74,11 @@ fn read_tags(path: &Path) -> TagData {
     }
 }
 
+/// How many inserts to make between `on_progress` callbacks. The frontend
+/// re-fetches the whole library on each one, so we batch to avoid emitting an
+/// event per file while still surfacing new tracks while the scan runs.
+const PROGRESS_BATCH: usize = 25;
+
 /// Sync the database to the contents of `folder`: insert newly-seen audio files
 /// (reading their tags) and remove rows whose files are gone.
 ///
@@ -81,7 +86,7 @@ fn read_tags(path: &Path) -> TagData {
 /// only for each individual DB operation. The slow work — walking the tree and
 /// reading tags — happens without the lock held, so callers like `get_library`
 /// can read the existing library while a scan is in progress.
-pub fn scan_and_sync(db: &Mutex<Connection>, folder: &str) {
+pub fn scan_and_sync(db: &Mutex<Connection>, folder: &str, on_progress: impl Fn()) {
     let mut disk_paths = std::collections::HashSet::new();
 
     for entry in WalkDir::new(folder)
@@ -102,6 +107,7 @@ pub fn scan_and_sync(db: &Mutex<Connection>, folder: &str) {
         crate::db::get_all_paths(&conn).unwrap_or_default()
     };
 
+    let mut inserted = 0usize;
     for path_str in disk_paths.difference(&db_paths) {
         let path = Path::new(path_str);
         let Some(filename) = path.file_name().and_then(|n| n.to_str()) else {
@@ -122,8 +128,14 @@ pub fn scan_and_sync(db: &Mutex<Connection>, folder: &str) {
             duration: tags.duration,
             genre: tags.genre,
         };
-        let Ok(conn) = db.lock() else { return };
-        let _ = crate::db::upsert_track(&conn, &row);
+        {
+            let Ok(conn) = db.lock() else { return };
+            let _ = crate::db::upsert_track(&conn, &row);
+        }
+        inserted += 1;
+        if inserted % PROGRESS_BATCH == 0 {
+            on_progress();
+        }
     }
 
     let to_delete: Vec<String> = db_paths.difference(&disk_paths).cloned().collect();
@@ -242,7 +254,7 @@ mod tests {
         touch_mp3(&dir, "b.mp3");
 
         let db = open_db();
-        scan_and_sync(&db, dir.path().to_str().unwrap());
+        scan_and_sync(&db, dir.path().to_str().unwrap(), || {});
 
         let paths = crate::db::get_all_paths(&db.lock().unwrap()).unwrap();
         assert_eq!(paths.len(), 2);
@@ -255,7 +267,7 @@ mod tests {
         fs::write(dir.path().join("readme.txt"), b"hello").unwrap();
 
         let db = open_db();
-        scan_and_sync(&db, dir.path().to_str().unwrap());
+        scan_and_sync(&db, dir.path().to_str().unwrap(), || {});
 
         let paths = crate::db::get_all_paths(&db.lock().unwrap()).unwrap();
         assert_eq!(paths.len(), 1);
@@ -267,14 +279,14 @@ mod tests {
         let path = touch_mp3(&dir, "gone.mp3");
 
         let db = open_db();
-        scan_and_sync(&db, dir.path().to_str().unwrap());
+        scan_and_sync(&db, dir.path().to_str().unwrap(), || {});
         assert_eq!(
             crate::db::get_all_paths(&db.lock().unwrap()).unwrap().len(),
             1
         );
 
         fs::remove_file(&path).unwrap();
-        scan_and_sync(&db, dir.path().to_str().unwrap());
+        scan_and_sync(&db, dir.path().to_str().unwrap(), || {});
         assert!(crate::db::get_all_paths(&db.lock().unwrap())
             .unwrap()
             .is_empty());
@@ -288,7 +300,7 @@ mod tests {
         fs::write(sub.join("track.mp3"), b"").unwrap();
 
         let db = open_db();
-        scan_and_sync(&db, dir.path().to_str().unwrap());
+        scan_and_sync(&db, dir.path().to_str().unwrap(), || {});
 
         assert_eq!(
             crate::db::get_all_paths(&db.lock().unwrap()).unwrap().len(),
@@ -302,7 +314,7 @@ mod tests {
         copy_tagged_fixture(&dir, "tagged.mp3");
 
         let db = open_db();
-        scan_and_sync(&db, dir.path().to_str().unwrap());
+        scan_and_sync(&db, dir.path().to_str().unwrap(), || {});
 
         let tracks = crate::db::get_tracks(&db.lock().unwrap(), "artist", "asc").unwrap();
         assert_eq!(tracks.len(), 1);
