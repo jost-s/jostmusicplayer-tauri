@@ -38,6 +38,9 @@ pub struct AppState {
     /// True while a background library scan is running. Lets the frontend show a
     /// scanning indicator even if it mounts after a startup scan has begun.
     pub scanning: AtomicBool,
+    /// Set to request the running scan stop early; the scan thread checks it
+    /// between files and bails out. Cleared at the start of each scan.
+    pub cancel_scan: AtomicBool,
 }
 
 /// Run a library scan on a background thread, emitting `scan-started` and
@@ -51,12 +54,19 @@ fn spawn_scan(app: AppHandle) {
         if state.scanning.swap(true, Ordering::SeqCst) {
             return;
         }
+        // Drop any stale cancel request from a previous scan before starting.
+        state.cancel_scan.store(false, Ordering::SeqCst);
 
         if let Some(folder) = read_config(&state.config_path).library_folder {
             let _ = app.emit("scan-started", ());
-            scanner::scan_and_sync(&state.db, &folder, || {
-                let _ = app.emit("scan-progress", ());
-            });
+            scanner::scan_and_sync(
+                &state.db,
+                &folder,
+                || {
+                    let _ = app.emit("scan-progress", ());
+                },
+                || state.cancel_scan.load(Ordering::SeqCst),
+            );
             state.scanning.store(false, Ordering::SeqCst);
             let _ = app.emit("scan-finished", ());
         } else {
@@ -99,6 +109,13 @@ fn scan_library(app: AppHandle) {
 #[tauri::command]
 fn is_scanning(state: State<AppState>) -> bool {
     state.scanning.load(Ordering::SeqCst)
+}
+
+/// Request that an in-progress scan stop. No-op if nothing is scanning; the scan
+/// thread emits `scan-finished` once it notices and bails out.
+#[tauri::command]
+fn cancel_scan(state: State<AppState>) {
+    state.cancel_scan.store(true, Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -203,6 +220,7 @@ pub fn run() {
                 db: Mutex::new(conn),
                 config_path,
                 scanning: AtomicBool::new(false),
+                cancel_scan: AtomicBool::new(false),
             });
 
             app.manage(player::AudioPlayer::new(app.handle().clone()));
@@ -220,6 +238,7 @@ pub fn run() {
             set_library_folder,
             scan_library,
             is_scanning,
+            cancel_scan,
             get_library,
             play_track,
             toggle_playback,

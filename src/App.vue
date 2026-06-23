@@ -292,6 +292,12 @@ async function selectMusicFolder() {
   await invoke("scan_library");
 }
 
+async function cancelScan() {
+  // The scan thread stops at the next file and emits `scan-finished`, which
+  // flips `scanning` off and refreshes whatever was indexed so far.
+  await invoke("cancel_scan");
+}
+
 async function onSortChange(by: string, dir: "asc" | "desc") {
   sortBy.value = by;
   sortDir.value = dir;
@@ -384,6 +390,7 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
       :loading="scanning"
       @close="showSettings = false"
       @select-folder="selectMusicFolder"
+      @cancel-scan="cancelScan"
     />
   </div>
 </template>

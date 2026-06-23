@@ -6,6 +6,7 @@ defineProps<{
 const emit = defineEmits<{
   close: [];
   "select-folder": [];
+  "cancel-scan": [];
 }>();
 </script>
 
@@ -25,6 +26,9 @@ const emit = defineEmits<{
         <div class="folder-row">
           <button :disabled="loading" @click="emit('select-folder')">
             {{ loading ? "Scanning…" : selectedFolder ? "Change Folder" : "Select Folder" }}
+          </button>
+          <button v-if="loading" class="cancel-scan" @click="emit('cancel-scan')">
+            Cancel
           </button>
           <span v-if="selectedFolder" class="folder-path" :title="selectedFolder">
             {{ selectedFolder }}
@@ -98,6 +102,16 @@ const emit = defineEmits<{
   align-items: center;
   gap: 0.75rem;
   overflow: hidden;
+}
+
+.cancel-scan {
+  flex-shrink: 0;
+  color: #b00020;
+}
+
+.cancel-scan:hover {
+  background-color: #b00020;
+  color: #fff;
 }
 
 .folder-path {
