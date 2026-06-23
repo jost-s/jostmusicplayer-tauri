@@ -13,7 +13,22 @@ pub struct TrackRow {
     pub genre: Option<String>,
 }
 
+/// Bump this whenever the schema below changes. On mismatch the DB is dropped
+/// and recreated; the library rescan on startup repopulates it. No migrations.
+const SCHEMA_VERSION: i64 = 1;
+
 pub fn init_schema(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+
+    // The tracks table is a pure cache derived from scanning the library folder,
+    // so on any schema change we just drop and recreate rather than migrate.
+    // Fresh databases report version 0 and take this branch harmlessly.
+    if version != SCHEMA_VERSION {
+        conn.execute_batch("BEGIN; DROP TABLE IF EXISTS tracks;")?;
+    } else {
+        conn.execute_batch("BEGIN;")?;
+    }
+
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS tracks (
             id        INTEGER PRIMARY KEY,
@@ -28,20 +43,11 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             genre     TEXT
         );",
     )?;
-    // Migrate databases created before the genre column existed.
-    add_column_if_missing(conn, "genre", "TEXT")?;
-    Ok(())
-}
 
-/// Add a column to `tracks` if it isn't already there. SQLite has no
-/// `ADD COLUMN IF NOT EXISTS`, so we consult `pragma_table_info` first.
-fn add_column_if_missing(conn: &Connection, name: &str, decl: &str) -> Result<()> {
-    let present = conn
-        .prepare("SELECT 1 FROM pragma_table_info('tracks') WHERE name = ?1")?
-        .exists([name])?;
-    if !present {
-        conn.execute(&format!("ALTER TABLE tracks ADD COLUMN {name} {decl}"), [])?;
-    }
+    // PRAGMA can't be parameterized, but SCHEMA_VERSION is a trusted constant.
+    conn.execute_batch(&format!(
+        "PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+    ))?;
     Ok(())
 }
 
@@ -156,6 +162,24 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
         init_schema(&conn).unwrap(); // second call must not fail
+    }
+
+    #[test]
+    fn stale_schema_version_rebuilds() {
+        let conn = open_db();
+        upsert_track(&conn, &sample_row("/keep.mp3")).unwrap();
+        assert_eq!(get_all_paths(&conn).unwrap().len(), 1);
+
+        // Simulate a DB written by an older/newer schema.
+        conn.execute_batch("PRAGMA user_version = 999;").unwrap();
+        init_schema(&conn).unwrap();
+
+        // Table was dropped and recreated empty, and is still queryable.
+        assert!(get_all_paths(&conn).unwrap().is_empty());
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
     }
 
     #[test]
