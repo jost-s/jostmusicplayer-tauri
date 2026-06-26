@@ -203,26 +203,35 @@ fn start_playback(
         // which trips symphonia's MP4 demuxer during init), so use our own
         // symphonia-backed source instead.
         let source = crate::symphonia_source::SymphoniaSource::new(path)?;
-        let total = source
-            .total_duration()
-            .map(|d| d.as_secs_f64())
-            .filter(|&s| s > 0.0)
-            .or_else(|| probe_duration(path));
+        let total = duration_or_probe(source.total_duration(), path);
         new_sink.append(source);
         total
     } else {
-        let file = File::open(path).map_err(|e| format!("failed to open file: {e}"))?;
-        let source =
-            Decoder::new(BufReader::new(file)).map_err(|e| format!("failed to decode: {e}"))?;
-        // rodio reports `None` for files it can't size up front (e.g. VBR MP3 without a
-        // Xing header); fall back to probing the file's properties with lofty.
-        let total = source
-            .total_duration()
-            .map(|d| d.as_secs_f64())
-            .filter(|&s| s > 0.0)
-            .or_else(|| probe_duration(path));
-        new_sink.append(source);
-        total
+        let opened = File::open(path)
+            .map_err(|e| format!("failed to open file: {e}"))
+            .and_then(|file| {
+                Decoder::new(BufReader::new(file)).map_err(|e| format!("failed to decode: {e}"))
+            });
+        match opened {
+            Ok(source) => {
+                let total = duration_or_probe(source.total_duration(), path);
+                new_sink.append(source);
+                total
+            }
+            Err(rodio_err) => {
+                // rodio's symphonia MP3 decoder rejects some files at construction
+                // — notably "invalid main_data offset", thrown when the opening
+                // frames reference the bit reservoir that isn't filled yet at the
+                // start of the stream. Our SymphoniaSource skips those leading
+                // frames and plays the rest, so fall back to it before giving up.
+                log::warn!("rodio decode failed ({rodio_err}); retrying with SymphoniaSource");
+                let source = crate::symphonia_source::SymphoniaSource::new(path)
+                    .map_err(|e| format!("{rodio_err}; fallback failed: {e}"))?;
+                let total = duration_or_probe(source.total_duration(), path);
+                new_sink.append(source);
+                total
+            }
+        }
     };
 
     *sink = Some(new_sink); // dropping the old sink stops the previous track
@@ -235,6 +244,16 @@ fn has_extension(path: &str, ext: &str) -> bool {
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+}
+
+/// Prefer a decoder-reported duration (when positive) and otherwise probe the
+/// file with lofty — the fallback for streams that can't report their length up
+/// front (e.g. VBR MP3 without a Xing header).
+fn duration_or_probe(reported: Option<Duration>, path: &str) -> Option<f64> {
+    reported
+        .map(|d| d.as_secs_f64())
+        .filter(|&s| s > 0.0)
+        .or_else(|| probe_duration(path))
 }
 
 /// Determine a track's duration by reading its audio properties. Works for VBR

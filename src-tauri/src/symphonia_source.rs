@@ -1,14 +1,20 @@
-//! A rodio [`Source`] for AAC audio in MP4 (`.m4a`) and raw ADTS (`.aac`)
-//! containers, decoded with symphonia.
+//! A rodio [`Source`] backed directly by symphonia, used for AAC audio in MP4
+//! (`.m4a`) and raw ADTS (`.aac`) containers, and as a fallback for MP3s that
+//! rodio's own `Decoder` rejects.
 //!
-//! rodio bundles symphonia decoders for these formats, but its own `Decoder`
-//! still can't play them: rodio wraps the input in a `ReadSeekSource` whose
+//! For AAC/MP4, rodio bundles symphonia decoders but its own `Decoder` still
+//! can't play them: rodio wraps the input in a `ReadSeekSource` whose
 //! `byte_len()` is always `None`, and symphonia's MP4 demuxer then performs a
 //! seek during initialization (to locate the `moov` atom) which rodio's decoder
 //! treats as `unreachable!` and panics on — the exact "Seek errors should not
 //! occur during initialization" crash. We build the `MediaSourceStream`
 //! straight from the `File`, which reports a real length, so the demuxer
 //! initializes without that seek; it also lets us drive seeking ourselves.
+//!
+//! For MP3, [`player`](crate::player) falls back here when rodio's decoder fails
+//! to construct — e.g. "invalid main_data offset" on files whose opening frames
+//! reference the bit reservoir before it has filled. Tolerating a run of initial
+//! decode errors (see `MAX_DECODE_RETRIES`) skips that warmup and plays the rest.
 
 use std::fs::File;
 use std::time::Duration;
@@ -24,9 +30,12 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
 
-/// A decode error in more than this many consecutive packets is treated as
-/// fatal (matches rodio's own symphonia decoder).
-const MAX_DECODE_RETRIES: usize = 3;
+/// Tolerate this many *consecutive* decode errors before treating the stream as
+/// unplayable. Beyond skipping the odd corrupt AAC packet, this covers MP3s that
+/// lean on the bit reservoir: their opening frames can throw "invalid main_data
+/// offset" for a dozen-odd packets until the reservoir fills. Generous enough to
+/// skip that warmup, but still bails on a genuinely broken stream.
+const MAX_DECODE_RETRIES: usize = 32;
 
 pub struct SymphoniaSource {
     format: Box<dyn FormatReader>,
@@ -128,7 +137,7 @@ impl SymphoniaSource {
             match self.decoder.decode(&packet) {
                 Ok(decoded) => break decoded,
                 Err(SymphoniaError::DecodeError(e)) => {
-                    log::error!("aac: decode error: {e}");
+                    log::error!("symphonia: decode error: {e}");
                     decode_errors += 1;
                     if decode_errors > MAX_DECODE_RETRIES {
                         return false;
@@ -290,6 +299,18 @@ mod tests {
             count > channels * 30_000,
             "decoded too few samples: {count}"
         );
+    }
+
+    #[test]
+    fn decodes_mp3_to_samples() {
+        // Exercises the MP3 fallback path: player.rs routes MP3s here when rodio's
+        // own decoder rejects them (e.g. "invalid main_data offset").
+        let mut source = SymphoniaSource::new(&fixture("tagged.mp3")).unwrap();
+        assert!(source.sample_rate() >= 8_000);
+        let channels = source.channels() as usize;
+        assert!(channels >= 1);
+        let count = source.by_ref().take(200_000).count();
+        assert!(count > channels * 10_000, "decoded too few samples: {count}");
     }
 
     #[test]
