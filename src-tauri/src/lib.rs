@@ -1,4 +1,5 @@
 mod db;
+mod media_controls;
 mod opus_source;
 mod player;
 mod scanner;
@@ -148,6 +149,42 @@ fn seek(seconds: f64, player: State<player::AudioPlayer>) -> Result<(), String> 
     player.seek(seconds)
 }
 
+/// Push the current track's text metadata to the OS now-playing UI.
+#[tauri::command]
+fn media_set_metadata(
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    duration: Option<f64>,
+    path: Option<String>,
+    mc: State<media_controls::MediaController>,
+) -> Result<(), String> {
+    mc.update_metadata(title, artist, album, duration, path)
+}
+
+/// Reflect play/pause state and position in the OS media UI.
+#[tauri::command]
+fn media_set_playback(
+    playing: bool,
+    position: f64,
+    mc: State<media_controls::MediaController>,
+) -> Result<(), String> {
+    mc.update_playback(playing, position)
+}
+
+/// Mark playback as stopped in the OS media UI.
+#[tauri::command]
+fn media_stop(mc: State<media_controls::MediaController>) -> Result<(), String> {
+    mc.stop()
+}
+
+/// Sidecar cover art for a track as a base64 data URI, or `None` if the track's
+/// folder has no recognised cover image. Used to show artwork in the app UI.
+#[tauri::command]
+fn get_cover_art(path: String) -> Option<String> {
+    media_controls::find_cover_data_uri(&path)
+}
+
 /// Open the directory holding the app's log file in the OS file manager, so logs
 /// can be inspected from the bundled app (which has no attached console).
 /// Triggered by the Help > Open Logs menu item.
@@ -225,6 +262,17 @@ pub fn run() {
 
             app.manage(player::AudioPlayer::new(app.handle().clone()));
 
+            // OS media controls (media keys + system now-playing UI). Created on
+            // the main thread as souvlaki's macOS backend requires. If the
+            // platform backend is unavailable, log and continue without it
+            // rather than failing startup; the media_* commands then no-op-error.
+            match media_controls::init(app.handle()) {
+                Ok(mc) => {
+                    app.manage(mc);
+                }
+                Err(e) => log::error!("media controls unavailable: {e}"),
+            }
+
             // Re-scan the saved library in the background so the window appears
             // instantly; the frontend listens for `scan-finished` to refresh.
             if has_folder {
@@ -244,6 +292,10 @@ pub fn run() {
             toggle_playback,
             playback_position,
             seek,
+            media_set_metadata,
+            media_set_playback,
+            media_stop,
+            get_cover_art,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -15,6 +15,7 @@ const showSettings = ref(false);
 const sortBy = ref("artist");
 const sortDir = ref<"asc" | "desc">("asc");
 const currentTrack = ref<Track | null>(null);
+const coverArt = ref<string | null>(null);
 const isPlaying = ref(false);
 const position = ref(0);
 const duration = ref(0);
@@ -179,6 +180,44 @@ onMounted(async () => {
       await playNext();
     }),
   );
+  // Hardware media keys and the OS now-playing UI route their transport commands
+  // here; the play order lives in this view (filteredTracks), so the backend
+  // forwards the raw command and we decide what it acts on.
+  unlisteners.push(
+    await listen<string>("media-control", async ({ payload }) => {
+      switch (payload) {
+        case "toggle":
+          await togglePlayback();
+          break;
+        case "play":
+          if (!isPlaying.value && currentTrack.value) await togglePlayback();
+          break;
+        case "pause":
+          if (isPlaying.value) await togglePlayback();
+          break;
+        case "next":
+          await playNext();
+          break;
+        case "previous":
+          await playPrevious();
+          break;
+        case "stop":
+          await stopPlayback();
+          break;
+        case "seek_forward":
+          await seekBy(5);
+          break;
+        case "seek_backward":
+          await seekBy(-5);
+          break;
+      }
+    }),
+  );
+  unlisteners.push(
+    await listen<number>("media-control-seek", async ({ payload }) => {
+      await seekToSeconds(payload);
+    }),
+  );
 
   selectedFolder.value = await invoke<string | null>("get_library_folder");
   if (selectedFolder.value) {
@@ -203,6 +242,26 @@ onUnmounted(() => {
   for (const unlisten of unlisteners) unlisten();
 });
 
+// Best-effort sync of the OS now-playing UI. These swallow errors so playback is
+// never blocked when the platform media backend is unavailable (e.g. no DBus).
+function pushMediaMetadata(track: Track) {
+  void invoke("media_set_metadata", {
+    title: track.title ?? track.filename,
+    artist: track.artist ?? null,
+    album: track.album ?? null,
+    duration: duration.value || null,
+    // Lets the backend find a sidecar cover image (cover.jpg, folder.jpg, …).
+    path: track.path,
+  }).catch(() => {});
+}
+
+function pushMediaPlayback() {
+  void invoke("media_set_playback", {
+    playing: isPlaying.value,
+    position: position.value,
+  }).catch(() => {});
+}
+
 async function playTrack(track: Track) {
   const total = await invoke<number | null>("play_track", { path: track.path });
   currentTrack.value = track;
@@ -210,11 +269,16 @@ async function playTrack(track: Track) {
   position.value = 0;
   // Prefer the duration the decoder reports; fall back to the scanned tag length.
   duration.value = total ?? track.duration ?? 0;
+  pushMediaMetadata(track);
+  pushMediaPlayback();
+  // Sidecar cover art for the now-playing display; null when the folder has none.
+  coverArt.value = await invoke<string | null>("get_cover_art", { path: track.path });
 }
 
-// Called when a track finishes on its own: continue with whatever is currently
-// shown in the table (respecting the active sort/filter), advancing to the row
-// after the one that just played. Stops if there's nothing after it.
+// Called when a track finishes on its own, or via the OS "next" control: continue
+// with whatever is currently shown in the table (respecting the active
+// sort/filter), advancing to the row after the one that just played. Stops if
+// there's nothing after it.
 async function playNext() {
   const current = currentTrack.value;
   const view = filteredTracks.value;
@@ -227,11 +291,47 @@ async function playNext() {
     position.value = 0;
     currentTrack.value = null;
     duration.value = 0;
+    coverArt.value = null;
+    void invoke("media_stop").catch(() => {});
   }
+}
+
+// OS "previous" control: step to the row before the current one in the visible
+// table. No-op at the top of the list.
+async function playPrevious() {
+  const current = currentTrack.value;
+  const view = filteredTracks.value;
+  const idx = current ? view.findIndex((t) => t.id === current.id) : -1;
+  if (idx > 0) await playTrack(view[idx - 1]);
 }
 
 async function togglePlayback() {
   isPlaying.value = await invoke<boolean>("toggle_playback");
+  pushMediaPlayback();
+}
+
+// OS "stop" control: there's no backend stop, so pause if playing and mark the
+// OS UI stopped. Position is left where it is so play resumes from there.
+async function stopPlayback() {
+  if (isPlaying.value) {
+    isPlaying.value = await invoke<boolean>("toggle_playback");
+  }
+  void invoke("media_stop").catch(() => {});
+}
+
+// Seek to an absolute position (used by the progress bar click and the OS
+// timeline scrubber), clamped to the track length.
+async function seekToSeconds(seconds: number) {
+  if (duration.value <= 0) return;
+  const clamped = Math.min(duration.value, Math.max(0, seconds));
+  position.value = clamped;
+  await invoke("seek", { seconds: clamped });
+  pushMediaPlayback();
+}
+
+// Relative seek used by the OS fast-forward / rewind controls.
+async function seekBy(delta: number) {
+  await seekToSeconds(position.value + delta);
 }
 
 async function seekTo(e: MouseEvent) {
@@ -239,9 +339,7 @@ async function seekTo(e: MouseEvent) {
   const bar = e.currentTarget as HTMLElement;
   const rect = bar.getBoundingClientRect();
   const fraction = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-  const seconds = fraction * duration.value;
-  position.value = seconds;
-  await invoke("seek", { seconds });
+  await seekToSeconds(fraction * duration.value);
 }
 
 function formatTime(seconds: number): string {
@@ -322,6 +420,7 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
         >
           {{ isPlaying ? "⏸" : "▶" }}
         </button>
+        <img v-if="currentTrack && coverArt" :src="coverArt" class="np-cover" alt="" />
         <div v-if="currentTrack" class="now-playing">
           <span class="np-title">{{ currentTrack.title ?? currentTrack.filename }}</span>
           <span v-if="currentTrack.artist" class="np-artist">{{ currentTrack.artist }}</span>
@@ -487,6 +586,14 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
   padding: 0.4em 0;
   font-size: 0.9em;
   text-align: center;
+}
+
+.np-cover {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 3px;
+  object-fit: cover;
+  flex-shrink: 0;
 }
 
 .now-playing {

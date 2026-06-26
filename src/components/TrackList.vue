@@ -101,6 +101,30 @@ function scrollPlayingIntoView() {
   scroller.value.scrollTop = Math.min(maxTop, Math.max(0, target));
 }
 
+// Bring the playing track into view only when it isn't already fully visible, so
+// skipping (next/previous, including via media keys) reveals an off-screen track
+// without yanking the view when the user double-clicks a row that's already shown.
+function ensurePlayingVisible() {
+  if (props.playingId == null || !scroller.value) return;
+  const index = props.tracks.findIndex((t) => t.id === props.playingId);
+  if (index < 0) return;
+  const rowTop = index * ROW_HEIGHT;
+  const viewTop = scroller.value.scrollTop;
+  if (rowTop >= viewTop && rowTop + ROW_HEIGHT <= viewTop + viewportHeight.value) return;
+  scrollPlayingIntoView();
+}
+
+// Follow the playing track as it changes (skip, auto-advance) by scrolling it into
+// view. The `tracks`-watch above already handles the re-sort case via its pending
+// flag, so this only needs to react to the id itself moving.
+watch(
+  () => props.playingId,
+  async () => {
+    await nextTick();
+    ensurePlayingVisible();
+  },
+);
+
 watch(
   () => props.tracks,
   async () => {

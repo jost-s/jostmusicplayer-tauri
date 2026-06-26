@@ -36,6 +36,17 @@ ogg = "0.9.2"
 # rodio's Decoder, which panics on .m4a. aac = AAC codec + ADTS demux for raw
 # .aac; isomp4 = MP4 container demux for .m4a.
 symphonia = { version = "0.5", features = ["aac", "isomp4"] }
+# Cross-platform OS media controls: macOS Now Playing / Control Center,
+# Windows SMTC, Linux MPRIS. Default features are fine on macOS/Windows; on
+# Linux the default DBus backend links libdbus-1-dev (switch to the zbus feature
+# for a pure-Rust build).
+souvlaki = "0.8"
+# Build percent-encoded `file://` URLs for sidecar cover art. souvlaki's macOS
+# backend feeds cover_url to `URLWithString:`, which rejects raw paths with spaces.
+url = "2"
+# Encode sidecar cover images as base64 data URIs for the webview <img>, which
+# can't load file:// paths directly under Tauri's asset sandbox.
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"
