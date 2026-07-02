@@ -20,6 +20,11 @@ const isPlaying = ref(false);
 const position = ref(0);
 const duration = ref(0);
 const showRemaining = ref(false);
+// Output volume as a fraction of the system volume (0 = silent, 1 = full).
+const volume = ref(1);
+// Level to restore when unmuting; remembers where the slider was before a mute so
+// the icon toggle brings it back rather than jumping to full.
+const preMuteVolume = ref(1);
 
 // --- Search + column-browser filters ----------------------------------------
 // A search box narrows the whole library; on top of it three panes (Genre →
@@ -351,6 +356,29 @@ async function seekTo(e: MouseEvent) {
   await seekToSeconds(fraction * duration.value);
 }
 
+// Set the volume, pushing it to the audio backend. Fire-and-forget: the backend
+// applies it to the live sink and remembers it for the next track.
+function setVolume(level: number) {
+  volume.value = level;
+  void invoke("set_volume", { level });
+}
+
+function onVolumeInput(e: Event) {
+  setVolume(Number((e.target as HTMLInputElement).value));
+}
+
+// Clicking the speaker icon mutes to silence, remembering the current level, and
+// clicking again restores it. Unmuting from a level of 0 falls back to full so
+// the toggle is never a no-op.
+function toggleMute() {
+  if (volume.value > 0) {
+    preMuteVolume.value = volume.value;
+    setVolume(0);
+  } else {
+    setVolume(preMuteVolume.value > 0 ? preMuteVolume.value : 1);
+  }
+}
+
 function formatTime(seconds: number): string {
   const total = Math.floor(seconds);
   const m = Math.floor(total / 60);
@@ -434,6 +462,30 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
           <span class="np-title">{{ currentTrack.title ?? currentTrack.filename }}</span>
           <span v-if="currentTrack.artist" class="np-artist">{{ currentTrack.artist }}</span>
         </div>
+      </div>
+
+      <div class="volume" title="Volume">
+        <span
+          class="volume-icon"
+          role="button"
+          :title="volume === 0 ? 'Unmute' : 'Mute'"
+          :aria-label="volume === 0 ? 'Unmute' : 'Mute'"
+          @click="toggleMute"
+        >
+          {{ volume === 0 ? "🔇" : volume < 0.5 ? "🔈" : "🔊" }}
+        </span>
+        <input
+          class="volume-slider"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          :value="volume"
+          :style="{ '--fill': volume * 100 + '%' }"
+          :title="`Volume ${Math.round(volume * 100)}%`"
+          aria-label="Volume"
+          @input="onVolumeInput"
+        />
       </div>
 
       <button class="cog-btn" title="Settings" @click="showSettings = true">
@@ -580,7 +632,60 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
   padding: 0;
   font-size: 1.1em;
   line-height: 1;
+}
+
+/* The volume group carries the auto margin, pushing it and the cog to the right
+   edge of the toolbar while the transport stays left-aligned. */
+.volume {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   margin-left: auto;
+}
+
+.volume-icon {
+  font-size: 0.9em;
+  width: 1.4em;
+  text-align: center;
+  user-select: none;
+  cursor: default;
+  opacity: 0.75;
+  transition: opacity 0.15s;
+}
+
+.volume-icon:hover {
+  opacity: 1;
+}
+
+.volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 90px;
+  height: 6px;
+  border-radius: 3px;
+  cursor: default;
+  outline: none;
+  /* Filled portion (blue) up to the thumb, track colour (grey) after it. */
+  background: linear-gradient(
+    to right,
+    #396cd8 var(--fill, 100%),
+    #ddd var(--fill, 100%)
+  );
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background-color: #396cd8;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.1s ease;
+}
+
+.volume-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.3);
 }
 
 .transport {
@@ -813,6 +918,14 @@ button:disabled {
 
   .progress-bar {
     background-color: #4a4a4a;
+  }
+
+  .volume-slider {
+    background: linear-gradient(
+      to right,
+      #396cd8 var(--fill, 100%),
+      #4a4a4a var(--fill, 100%)
+    );
   }
 
   .time.clickable:hover {

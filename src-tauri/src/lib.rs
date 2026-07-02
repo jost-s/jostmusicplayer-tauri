@@ -149,6 +149,12 @@ fn seek(seconds: f64, player: State<player::AudioPlayer>) -> Result<(), String> 
     player.seek(seconds)
 }
 
+/// Set the playback volume as a fraction of the system volume (0.0–1.0).
+#[tauri::command]
+fn set_volume(level: f32, player: State<player::AudioPlayer>) {
+    player.set_volume(level);
+}
+
 /// Push the current track's text metadata to the OS now-playing UI.
 #[tauri::command]
 fn media_set_metadata(
@@ -292,6 +298,7 @@ pub fn run() {
             toggle_playback,
             playback_position,
             seek,
+            set_volume,
             media_set_metadata,
             media_set_playback,
             media_stop,

@@ -31,6 +31,12 @@ enum AudioCommand {
         secs: f64,
         resp: Sender<Result<(), String>>,
     },
+    /// Set the output volume as a multiplier over the system ("absolute") volume,
+    /// where 1.0 is unattenuated. Fire-and-forget so rapid slider drags don't
+    /// block the UI thread waiting on a reply.
+    SetVolume {
+        level: f32,
+    },
 }
 
 /// Handle to the dedicated audio thread.
@@ -62,6 +68,9 @@ impl AudioPlayer {
             // Distinguishes a natural finish from a manual stop so we only emit
             // `playback-ended` for the former.
             let mut active = false;
+            // Output volume multiplier, remembered across tracks so a new sink
+            // starts at the level the user last chose rather than resetting to 1.0.
+            let mut volume: f32 = 1.0;
 
             loop {
                 match rx.recv_timeout(POLL_INTERVAL) {
@@ -71,7 +80,7 @@ impl AudioPlayer {
                         // thread alive, so playback recovers on the next command
                         // instead of every later command failing with a closed channel.
                         let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
-                            handle_command(cmd, &handle, &mut sink)
+                            handle_command(cmd, &handle, &mut sink, &mut volume)
                         }));
                         match outcome {
                             Ok(Some(new_active)) => active = new_active,
@@ -131,6 +140,10 @@ impl AudioPlayer {
         rx.recv()
             .map_err(|err| format!("audio thread did not respond: {err}"))?
     }
+
+    pub fn set_volume(&self, level: f32) {
+        let _ = self.tx.send(AudioCommand::SetVolume { level });
+    }
 }
 
 /// Process one command, replying on its response channel. Returns `Some(active)`
@@ -141,10 +154,11 @@ fn handle_command(
     cmd: AudioCommand,
     handle: &OutputStreamHandle,
     sink: &mut Option<Sink>,
+    volume: &mut f32,
 ) -> Option<bool> {
     match cmd {
         AudioCommand::Play { path, resp } => {
-            let _ = resp.send(start_playback(handle, &path, sink));
+            let _ = resp.send(start_playback(handle, &path, sink, *volume));
             Some(sink.is_some())
         }
         AudioCommand::Toggle { resp } => {
@@ -178,6 +192,15 @@ fn handle_command(
             let _ = resp.send(result);
             None
         }
+        AudioCommand::SetVolume { level } => {
+            // Clamp to [0, 1]: a multiplier above 1.0 amplifies past the source's
+            // native level and clips, so the slider only ever attenuates.
+            *volume = level.clamp(0.0, 1.0);
+            if let Some(s) = sink.as_ref() {
+                s.set_volume(*volume);
+            }
+            None
+        }
     }
 }
 
@@ -187,8 +210,10 @@ fn start_playback(
     handle: &rodio::OutputStreamHandle,
     path: &str,
     sink: &mut Option<Sink>,
+    volume: f32,
 ) -> Result<Option<f64>, String> {
     let new_sink = Sink::try_new(handle).map_err(|e| format!("failed to create sink: {e}"))?;
+    new_sink.set_volume(volume);
 
     // rodio's symphonia decoders don't cover Opus, so route .opus through our
     // own libopus-backed source; everything else goes through rodio's decoder.
