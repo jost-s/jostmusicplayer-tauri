@@ -177,7 +177,9 @@ onMounted(async () => {
   );
   unlisteners.push(
     await listen("playback-ended", async () => {
-      await playNext();
+      // A track finished on its own: roll onto the next, or go idle if it was the
+      // last one.
+      if (!(await playNext())) resetPlayback();
     }),
   );
   // Hardware media keys and the OS now-playing UI route their transport commands
@@ -275,25 +277,20 @@ async function playTrack(track: Track) {
   coverArt.value = await invoke<string | null>("get_cover_art", { path: track.path });
 }
 
-// Called when a track finishes on its own, or via the OS "next" control: continue
-// with whatever is currently shown in the table (respecting the active
-// sort/filter), advancing to the row after the one that just played. Stops if
-// there's nothing after it.
-async function playNext() {
+// Advance to the row after the current one in the visible table (respecting the
+// active sort/filter). No-op at the end of the list, leaving the current track
+// playing — so an over-eager skip never strands playback with no now-playing
+// info. Returns whether it actually advanced.
+async function playNext(): Promise<boolean> {
   const current = currentTrack.value;
   const view = filteredTracks.value;
   const idx = current ? view.findIndex((t) => t.id === current.id) : -1;
   const next = idx >= 0 ? view[idx + 1] : undefined;
   if (next) {
     await playTrack(next);
-  } else {
-    isPlaying.value = false;
-    position.value = 0;
-    currentTrack.value = null;
-    duration.value = 0;
-    coverArt.value = null;
-    void invoke("media_stop").catch(() => {});
+    return true;
   }
+  return false;
 }
 
 // OS "previous" control: step to the row before the current one in the visible
@@ -303,6 +300,18 @@ async function playPrevious() {
   const view = filteredTracks.value;
   const idx = current ? view.findIndex((t) => t.id === current.id) : -1;
   if (idx > 0) await playTrack(view[idx - 1]);
+}
+
+// Return to the idle state after playback truly ends (the last track finished on
+// its own). The audio has already stopped, so this just clears the now-playing
+// display and tells the OS media UI playback is over.
+function resetPlayback() {
+  isPlaying.value = false;
+  position.value = 0;
+  currentTrack.value = null;
+  duration.value = 0;
+  coverArt.value = null;
+  void invoke("media_stop").catch(() => {});
 }
 
 async function togglePlayback() {
