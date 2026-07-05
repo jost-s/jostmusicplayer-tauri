@@ -147,6 +147,15 @@ watch(
   },
 );
 
+// Let the parent request that the playing track be scrolled into view once the
+// next `tracks` update lands — e.g. after clearing filters re-expands the list.
+// Reuses the same pending-flag path as a column re-sort.
+defineExpose({
+  queueScrollToPlaying() {
+    scrollToPlayingPending = true;
+  },
+});
+
 let resizeObserver: ResizeObserver | undefined;
 onMounted(() => {
   if (!scroller.value) return;

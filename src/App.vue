@@ -8,6 +8,7 @@ import ColumnBrowser from "./components/ColumnBrowser.vue";
 import { type FacetItem } from "./components/FilterPane.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
 
+const trackList = ref<InstanceType<typeof TrackList> | null>(null);
 const selectedFolder = ref<string | null>(null);
 const tracks = ref<Track[]>([]);
 const scanning = ref(false);
@@ -123,6 +124,9 @@ function clearFilters() {
   selectedGenres.value = new Set();
   selectedArtists.value = new Set();
   selectedAlbums.value = new Set();
+  // Re-expanding the list would otherwise leave the view where it was; keep the
+  // playing track in focus by scrolling to it once the wider list lands.
+  if (currentTrack.value) trackList.value?.queueScrollToPlaying();
 }
 
 // Footer summary: total tracks in the library, noting how many are shown when a
@@ -463,34 +467,6 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
           <span v-if="currentTrack.artist" class="np-artist">{{ currentTrack.artist }}</span>
         </div>
       </div>
-
-      <div class="volume" title="Volume">
-        <span
-          class="volume-icon"
-          role="button"
-          :title="volume === 0 ? 'Unmute' : 'Mute'"
-          :aria-label="volume === 0 ? 'Unmute' : 'Mute'"
-          @click="toggleMute"
-        >
-          {{ volume === 0 ? "🔇" : volume < 0.5 ? "🔈" : "🔊" }}
-        </span>
-        <input
-          class="volume-slider"
-          type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          :value="volume"
-          :style="{ '--fill': volume * 100 + '%' }"
-          :title="`Volume ${Math.round(volume * 100)}%`"
-          aria-label="Volume"
-          @input="onVolumeInput"
-        />
-      </div>
-
-      <button class="cog-btn" title="Settings" @click="showSettings = true">
-        ⚙
-      </button>
     </header>
 
     <div class="filter-bar">
@@ -534,6 +510,7 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
 
     <main class="library">
       <TrackList
+        ref="trackList"
         :tracks="filteredTracks"
         :playing-id="currentTrack?.id ?? null"
         :scanning="scanning"
@@ -542,7 +519,35 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
       />
     </main>
 
-    <footer class="status-bar">{{ trackCountLabel }}</footer>
+    <footer class="status-bar">
+      <button class="cog-btn" title="Settings" @click="showSettings = true">
+        ⚙
+      </button>
+      <span class="track-count">{{ trackCountLabel }}</span>
+      <div class="volume" title="Volume">
+        <span
+          class="volume-icon"
+          role="button"
+          :title="volume === 0 ? 'Unmute' : 'Mute'"
+          :aria-label="volume === 0 ? 'Unmute' : 'Mute'"
+          @click="toggleMute"
+        >
+          {{ volume === 0 ? "🔇" : volume < 0.5 ? "🔈" : "🔊" }}
+        </span>
+        <input
+          class="volume-slider"
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          :value="volume"
+          :style="{ '--fill': volume * 100 + '%' }"
+          :title="`Volume ${Math.round(volume * 100)}%`"
+          aria-label="Volume"
+          @input="onVolumeInput"
+        />
+      </div>
+    </footer>
 
     <SettingsDialog
       v-if="showSettings"
@@ -627,20 +632,17 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
 }
 
 .cog-btn {
-  width: 2.2rem;
-  height: 2.2rem;
+  width: 1.8rem;
+  height: 1.8rem;
   padding: 0;
-  font-size: 1.1em;
+  font-size: 1.7em;
   line-height: 1;
 }
 
-/* The volume group carries the auto margin, pushing it and the cog to the right
-   edge of the toolbar while the transport stays left-aligned. */
 .volume {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-left: auto;
 }
 
 .volume-icon {
@@ -854,13 +856,22 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
 
 .status-bar {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
   padding: 0.35rem 1.5rem;
   border-top: 1px solid #ddd;
   font-size: 0.75em;
   color: #666;
-  text-align: center;
   font-variant-numeric: tabular-nums;
   user-select: none;
+}
+
+/* Track count keeps the centre; the cog sits at the left edge and the volume
+   group at the right. */
+.status-bar .track-count {
+  flex: 1;
+  text-align: center;
 }
 
 button {
