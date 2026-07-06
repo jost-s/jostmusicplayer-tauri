@@ -531,10 +531,6 @@ async function onTagsSaved() {
     </main>
 
     <footer class="status-bar">
-      <button class="cog-btn" title="Settings" @click="showSettings = true">
-        ⚙
-      </button>
-      <span class="track-count">{{ trackCountLabel }}</span>
       <div class="volume" title="Volume">
         <span
           class="volume-icon"
@@ -558,6 +554,10 @@ async function onTagsSaved() {
           @input="onVolumeInput"
         />
       </div>
+      <span class="track-count">{{ trackCountLabel }}</span>
+      <button class="cog-btn" title="Settings" @click="showSettings = true">
+        ⚙
+      </button>
     </footer>
 
     <SettingsDialog
@@ -885,8 +885,8 @@ async function onTagsSaved() {
   user-select: none;
 }
 
-/* Track count keeps the centre; the cog sits at the left edge and the volume
-   group at the right. */
+/* Track count keeps the centre; the volume group sits at the left edge and the
+   cog at the right. */
 .status-bar .track-count {
   flex: 1;
   text-align: center;
