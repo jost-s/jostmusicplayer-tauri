@@ -1,5 +1,7 @@
+use lofty::config::WriteOptions;
 use lofty::file::{AudioFile, TaggedFileExt};
-use lofty::tag::Accessor;
+use lofty::probe::Probe;
+use lofty::tag::{Accessor, Tag, TagExt};
 use rusqlite::Connection;
 use std::path::Path;
 use std::sync::Mutex;
@@ -72,6 +74,128 @@ fn read_tags(path: &Path) -> TagData {
             ..EMPTY_TAGS
         },
     }
+}
+
+/// The user-editable subset of a track's tags. `None` means "clear this field";
+/// `Some` means "set it to this value". Numeric fields use the same widths as
+/// `TagData`/`TrackRow`; they're widened to `u32` for lofty's setters.
+pub struct TagEdit {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<i32>,
+    pub track_num: Option<u32>,
+    pub genre: Option<String>,
+}
+
+/// A valid tag year must be exactly 4 digits. lofty happily *writes* a shorter
+/// year (e.g. 0 or 20) but then can no longer *read* the file — it fails with
+/// "invalid year length (should be 4 digits)", corrupting the whole tag. We only
+/// ever write years in this range; anything else is treated as "no year".
+const YEAR_RANGE: std::ops::RangeInclusive<i32> = 1000..=9999;
+
+/// Apply `edit` to a tag: `Some(value)` sets a field, `None` removes it. Year and
+/// track values outside their valid range (including 0) are removed rather than
+/// written, so we never persist a value that would make the file unreadable.
+fn apply_edit(tag: &mut Tag, edit: &TagEdit) {
+    match &edit.title {
+        Some(v) => tag.set_title(v.clone()),
+        None => tag.remove_title(),
+    }
+    match &edit.artist {
+        Some(v) => tag.set_artist(v.clone()),
+        None => tag.remove_artist(),
+    }
+    match &edit.album {
+        Some(v) => tag.set_album(v.clone()),
+        None => tag.remove_album(),
+    }
+    match &edit.genre {
+        Some(v) => tag.set_genre(v.clone()),
+        None => tag.remove_genre(),
+    }
+    match edit.year {
+        Some(y) if YEAR_RANGE.contains(&y) => tag.set_year(y as u32),
+        _ => tag.remove_year(),
+    }
+    match edit.track_num {
+        Some(n) if n > 0 => tag.set_track(n),
+        _ => tag.remove_track(),
+    }
+}
+
+/// Write `edit` into `path`'s tags and save to disk. Reuses the file's primary
+/// tag when it has one, creating a tag of the file's native type (e.g. ID3v2 for
+/// MP3, Vorbis comments for Opus) otherwise. Returns the error string on failure
+/// so the Tauri command can surface it to the frontend.
+///
+/// If the file's existing tags can't be parsed — e.g. it was corrupted by a
+/// previously-written invalid year — we fall back to writing a fresh tag over it,
+/// so the edit dialog can repair the file rather than being permanently stuck.
+pub fn write_tags(path: &Path, edit: &TagEdit) -> Result<(), String> {
+    // Reject an out-of-range year with a clear message instead of silently
+    // dropping it, so a mistyped year (e.g. "20") is corrected rather than lost.
+    if let Some(y) = edit.year {
+        if y != 0 && !YEAR_RANGE.contains(&y) {
+            return Err("Year must be a 4-digit number (1000–9999).".to_string());
+        }
+    }
+
+    match lofty::read_from_path(path) {
+        Ok(mut tagged_file) => {
+            let tag = match tagged_file.primary_tag_mut() {
+                Some(_) => tagged_file.primary_tag_mut().unwrap(),
+                None => {
+                    let tag_type = tagged_file.primary_tag_type();
+                    tagged_file.insert_tag(Tag::new(tag_type));
+                    tagged_file.primary_tag_mut().unwrap()
+                }
+            };
+            apply_edit(tag, edit);
+            tagged_file
+                .save_to_path(path, WriteOptions::default())
+                .map_err(|e| e.to_string())
+        }
+        Err(_) => {
+            // Determine the format without parsing (possibly corrupt) tags, then
+            // overwrite with a fresh tag of the file's native type.
+            let file_type = Probe::open(path)
+                .map_err(|e| e.to_string())?
+                .guess_file_type()
+                .map_err(|e| e.to_string())?
+                .file_type()
+                .ok_or_else(|| "unrecognized audio format".to_string())?;
+            let mut tag = Tag::new(file_type.primary_tag_type());
+            apply_edit(&mut tag, edit);
+            tag.save_to_path(path, WriteOptions::default())
+                .map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// Re-read `path`'s tags from disk and upsert them into the DB, keeping the
+/// cache consistent with the file after an edit without a full rescan. The file
+/// is the source of truth: we index whatever `write_tags` actually persisted.
+pub fn reindex_path(db: &Mutex<Connection>, path: &Path) -> Result<(), String> {
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| format!("invalid filename: {}", path.display()))?
+        .to_owned();
+    let tags = read_tags(path);
+    let row = crate::db::TrackRow {
+        path: path.to_string_lossy().into_owned(),
+        filename,
+        title: tags.title,
+        artist: tags.artist,
+        album: tags.album,
+        year: tags.year,
+        track_num: tags.track_num,
+        duration: tags.duration,
+        genre: tags.genre,
+    };
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    crate::db::upsert_track(&conn, &row).map_err(|e| e.to_string())
 }
 
 /// How many inserts to make between `on_progress` callbacks. The frontend
@@ -234,6 +358,88 @@ mod tests {
     }
 
     #[test]
+    fn write_tags_rejects_non_four_digit_year() {
+        let dir = TempDir::new().unwrap();
+        let path = copy_tagged_fixture(&dir, "tagged.mp3");
+        let edit = TagEdit {
+            title: Some("Keep".into()),
+            artist: None,
+            album: None,
+            year: Some(20), // not 4 digits — would corrupt the file if written
+            track_num: None,
+            genre: None,
+        };
+        let err = write_tags(&path, &edit).unwrap_err();
+        assert!(err.contains("4-digit"), "unexpected error: {err}");
+        // The file must be untouched and still readable (fixture title intact).
+        assert_eq!(read_tags(&path).title.as_deref(), Some("My Song"));
+    }
+
+    #[test]
+    fn write_tags_recovers_from_corrupt_file() {
+        let dir = TempDir::new().unwrap();
+        let path = copy_tagged_fixture(&dir, "tagged.mp3");
+
+        // Corrupt the file the way the old invalid-year write did: a 2-digit year
+        // that lofty writes but can no longer read back.
+        {
+            let mut tf = lofty::read_from_path(&path).unwrap();
+            tf.primary_tag_mut().unwrap().set_year(20);
+            tf.save_to_path(&path, WriteOptions::default()).unwrap();
+        }
+        assert!(
+            lofty::read_from_path(&path).is_err(),
+            "expected the file to be unreadable after corruption"
+        );
+
+        // The edit dialog should still be able to repair it by writing fresh tags.
+        write_tags(
+            &path,
+            &TagEdit {
+                title: Some("Repaired".into()),
+                artist: Some("Artist".into()),
+                album: None,
+                year: Some(2000),
+                track_num: None,
+                genre: None,
+            },
+        )
+        .unwrap();
+
+        let tags = read_tags(&path);
+        assert_eq!(tags.title.as_deref(), Some("Repaired"));
+        assert_eq!(tags.artist.as_deref(), Some("Artist"));
+        assert_eq!(tags.year, Some(2000));
+    }
+
+    #[test]
+    fn write_tags_year_zero_clears_year_without_wiping_tag() {
+        // Regression: setting year to 0 must not destroy the other frames. lofty
+        // encodes year 0 as an invalid ID3v2 timestamp that corrupts the whole
+        // tag, so `write_tags` treats 0 (and negatives) as "remove the year".
+        let dir = TempDir::new().unwrap();
+        let path = copy_tagged_fixture(&dir, "tagged.mp3");
+        let edit = TagEdit {
+            title: Some("My Song".into()),
+            artist: Some("My Artist".into()),
+            album: Some("My Album".into()),
+            year: Some(0),
+            track_num: Some(0),
+            genre: Some("Rock".into()),
+        };
+        write_tags(&path, &edit).unwrap();
+
+        let tags = read_tags(&path);
+        assert_eq!(tags.title.as_deref(), Some("My Song"));
+        assert_eq!(tags.artist.as_deref(), Some("My Artist"));
+        assert_eq!(tags.album.as_deref(), Some("My Album"));
+        assert_eq!(tags.genre.as_deref(), Some("Rock"));
+        // 0 is treated as "unset", so these round-trip as absent.
+        assert_eq!(tags.year, None);
+        assert_eq!(tags.track_num, None);
+    }
+
+    #[test]
     fn read_tags_from_opus() {
         let dir = TempDir::new().unwrap();
         copy_tagged_fixture(&dir, "tagged.opus");
@@ -348,5 +554,82 @@ mod tests {
         assert_eq!(tracks.len(), 1);
         assert_eq!(tracks[0].title.as_deref(), Some("My Song"));
         assert_eq!(tracks[0].artist.as_deref(), Some("My Artist"));
+    }
+
+    fn full_edit() -> TagEdit {
+        TagEdit {
+            title: Some("New Title".to_owned()),
+            artist: Some("New Artist".to_owned()),
+            album: Some("New Album".to_owned()),
+            year: Some(1999),
+            track_num: Some(7),
+            genre: Some("Jazz".to_owned()),
+        }
+    }
+
+    #[test]
+    fn write_tags_updates_fields() {
+        let dir = TempDir::new().unwrap();
+        let path = copy_tagged_fixture(&dir, "tagged.mp3");
+
+        write_tags(&path, &full_edit()).unwrap();
+
+        let tags = read_tags(&path);
+        assert_eq!(tags.title.as_deref(), Some("New Title"));
+        assert_eq!(tags.artist.as_deref(), Some("New Artist"));
+        assert_eq!(tags.album.as_deref(), Some("New Album"));
+        assert_eq!(tags.year, Some(1999));
+        assert_eq!(tags.track_num, Some(7));
+        assert_eq!(tags.genre.as_deref(), Some("Jazz"));
+    }
+
+    #[test]
+    fn write_tags_clears_fields_when_none() {
+        let dir = TempDir::new().unwrap();
+        let path = copy_tagged_fixture(&dir, "tagged.mp3");
+
+        let cleared = TagEdit {
+            title: None,
+            artist: None,
+            album: None,
+            year: None,
+            track_num: None,
+            genre: None,
+        };
+        write_tags(&path, &cleared).unwrap();
+
+        let tags = read_tags(&path);
+        assert!(tags.title.is_none());
+        assert!(tags.artist.is_none());
+    }
+
+    #[test]
+    fn write_tags_on_opus() {
+        let dir = TempDir::new().unwrap();
+        let path = copy_tagged_fixture(&dir, "tagged.opus");
+
+        write_tags(&path, &full_edit()).unwrap();
+
+        let tags = read_tags(&path);
+        assert_eq!(tags.title.as_deref(), Some("New Title"));
+        assert_eq!(tags.artist.as_deref(), Some("New Artist"));
+    }
+
+    #[test]
+    fn reindex_path_syncs_db_after_edit() {
+        let dir = TempDir::new().unwrap();
+        let path = copy_tagged_fixture(&dir, "tagged.mp3");
+
+        let db = open_db();
+        scan_and_sync(&db, dir.path().to_str().unwrap(), || {}, || false);
+
+        write_tags(&path, &full_edit()).unwrap();
+        reindex_path(&db, &path).unwrap();
+
+        let tracks = crate::db::get_tracks(&db.lock().unwrap(), "artist", "asc").unwrap();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].title.as_deref(), Some("New Title"));
+        assert_eq!(tracks[0].artist.as_deref(), Some("New Artist"));
+        assert_eq!(tracks[0].year, Some(1999));
     }
 }

@@ -191,6 +191,41 @@ fn get_cover_art(path: String) -> Option<String> {
     media_controls::find_cover_data_uri(&path)
 }
 
+/// Trim a text field and treat blank as absent, so clearing an input in the edit
+/// dialog removes the tag frame rather than writing an empty string.
+fn norm(value: Option<String>) -> Option<String> {
+    value
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+/// Write edited tags to the audio file at `path` and refresh its DB row so the
+/// library reflects the change without a rescan. Empty text fields clear the
+/// corresponding tag. The frontend refreshes the library after this resolves.
+#[tauri::command]
+fn update_track_tags(
+    path: String,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    year: Option<i32>,
+    track_num: Option<u32>,
+    genre: Option<String>,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    let edit = scanner::TagEdit {
+        title: norm(title),
+        artist: norm(artist),
+        album: norm(album),
+        year,
+        track_num,
+        genre: norm(genre),
+    };
+    scanner::write_tags(p, &edit)?;
+    scanner::reindex_path(&state.db, p)
+}
+
 /// Open the directory holding the app's log file in the OS file manager, so logs
 /// can be inspected from the bundled app (which has no attached console).
 /// Triggered by the Help > Open Logs menu item.
@@ -303,6 +338,7 @@ pub fn run() {
             media_set_playback,
             media_stop,
             get_cover_art,
+            update_track_tags,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

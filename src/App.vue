@@ -7,12 +7,15 @@ import TrackList, { type Track } from "./components/TrackList.vue";
 import ColumnBrowser from "./components/ColumnBrowser.vue";
 import { type FacetItem } from "./components/FilterPane.vue";
 import SettingsDialog from "./components/SettingsDialog.vue";
+import EditTagsDialog from "./components/EditTagsDialog.vue";
 
 const trackList = ref<InstanceType<typeof TrackList> | null>(null);
 const selectedFolder = ref<string | null>(null);
 const tracks = ref<Track[]>([]);
 const scanning = ref(false);
 const showSettings = ref(false);
+// The track whose tags are being edited, or null when the dialog is closed.
+const editingTrack = ref<Track | null>(null);
 const sortBy = ref("artist");
 const sortDir = ref<"asc" | "desc">("asc");
 const currentTrack = ref<Track | null>(null);
@@ -442,6 +445,13 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
   sortDir.value = dir;
   await refreshLibrary();
 }
+
+// Tags were written to disk and the DB row refreshed; pull the fresh library so
+// the table reflects the edit, then close the dialog.
+async function onTagsSaved() {
+  await refreshLibrary();
+  editingTrack.value = null;
+}
 </script>
 
 <template>
@@ -516,6 +526,7 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
         :scanning="scanning"
         @sort-change="onSortChange"
         @play-track="playTrack"
+        @edit-track="editingTrack = $event"
       />
     </main>
 
@@ -556,6 +567,13 @@ async function onSortChange(by: string, dir: "asc" | "desc") {
       @close="showSettings = false"
       @select-folder="selectMusicFolder"
       @cancel-scan="cancelScan"
+    />
+
+    <EditTagsDialog
+      v-if="editingTrack"
+      :track="editingTrack"
+      @close="editingTrack = null"
+      @saved="onTagsSaved"
     />
   </div>
 </template>

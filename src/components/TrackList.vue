@@ -22,7 +22,23 @@ const props = defineProps<{
 const emit = defineEmits<{
   "sort-change": [sortBy: string, sortDir: "asc" | "desc"];
   "play-track": [track: Track];
+  "edit-track": [track: Track];
 }>();
+
+// Right-click context menu. `null` when closed; otherwise holds the cursor
+// position and the track it was opened on.
+const contextMenu = ref<{ x: number; y: number; track: Track } | null>(null);
+
+function openContextMenu(event: MouseEvent, track: Track) {
+  contextMenu.value = { x: event.clientX, y: event.clientY, track };
+}
+function closeContextMenu() {
+  contextMenu.value = null;
+}
+function editFromMenu() {
+  if (contextMenu.value) emit("edit-track", contextMenu.value.track);
+  closeContextMenu();
+}
 
 const sortBy = ref("artist");
 const sortDir = ref<"asc" | "desc">("asc");
@@ -85,6 +101,8 @@ const bottomPad = computed(() => (props.tracks.length - endIndex.value) * ROW_HE
 
 function onScroll() {
   if (scroller.value) scrollTop.value = scroller.value.scrollTop;
+  // Scrolling would leave the menu floating over the wrong row; dismiss it.
+  closeContextMenu();
 }
 
 // Set when the user toggles a column header; consumed once the re-sorted `tracks`
@@ -156,8 +174,13 @@ defineExpose({
   },
 });
 
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") closeContextMenu();
+}
+
 let resizeObserver: ResizeObserver | undefined;
 onMounted(() => {
+  window.addEventListener("keydown", onKeydown);
   if (!scroller.value) return;
   viewportHeight.value = scroller.value.clientHeight;
   resizeObserver = new ResizeObserver(() => {
@@ -165,7 +188,10 @@ onMounted(() => {
   });
   resizeObserver.observe(scroller.value);
 });
-onBeforeUnmount(() => resizeObserver?.disconnect());
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  window.removeEventListener("keydown", onKeydown);
+});
 </script>
 
 <template>
@@ -220,6 +246,7 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
             :key="track.id"
             :class="{ playing: track.id === props.playingId }"
             @dblclick="emit('play-track', track)"
+            @contextmenu.prevent="openContextMenu($event, track)"
           >
             <td class="num">{{ track.track_num ?? "—" }}</td>
             <td class="title">{{ track.title ?? track.filename }}</td>
@@ -234,6 +261,22 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
         </tbody>
       </table>
     </div>
+
+    <!-- Right-click context menu. The full-screen backdrop swallows the next
+         click (or right-click) anywhere to dismiss the menu. -->
+    <template v-if="contextMenu">
+      <div
+        class="context-backdrop"
+        @click="closeContextMenu"
+        @contextmenu.prevent="closeContextMenu"
+      ></div>
+      <ul
+        class="context-menu"
+        :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+      >
+        <li @click="editFromMenu">Edit tags…</li>
+      </ul>
+    </template>
   </div>
 </template>
 
@@ -359,6 +402,39 @@ td.empty {
   color: #999;
 }
 
+/* Transparent layer over the whole window so any click dismisses the menu. */
+.context-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 201;
+  min-width: 9rem;
+  list-style: none;
+  padding: 0.25rem;
+  background-color: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  font-size: 0.9em;
+  user-select: none;
+}
+
+.context-menu li {
+  padding: 0.4rem 0.75rem;
+  border-radius: 4px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.context-menu li:hover {
+  background-color: #396cd8;
+  color: #fff;
+}
+
 @media (prefers-color-scheme: dark) {
   thead th {
     background-color: #2f2f2f;
@@ -387,6 +463,16 @@ td.empty {
 
   td.num {
     color: #999;
+  }
+
+  .context-menu {
+    background-color: #2f2f2f;
+    border-color: #444;
+  }
+
+  .context-menu li:hover {
+    background-color: #7aa2f7;
+    color: #1f1f1f;
   }
 }
 </style>
