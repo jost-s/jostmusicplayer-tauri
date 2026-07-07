@@ -111,9 +111,15 @@ impl MediaController {
             .map_err(|e| format!("set_playback failed: {e:?}"))
     }
 
-    /// Mark playback as fully stopped in the OS UI.
+    /// Mark playback as fully stopped in the OS UI and clear the now-playing
+    /// text/artwork. Clearing the metadata as well as the play state keeps the
+    /// system tile (e.g. macOS Now Playing / Control Center) from lingering on
+    /// the last track after the queue has run out.
     pub fn stop(&self) -> Result<(), String> {
         let mut controls = self.0.lock().map_err(|e| e.to_string())?;
+        controls
+            .set_metadata(MediaMetadata::default())
+            .map_err(|e| format!("set_metadata failed: {e:?}"))?;
         controls
             .set_playback(MediaPlayback::Stopped)
             .map_err(|e| format!("set_playback failed: {e:?}"))
