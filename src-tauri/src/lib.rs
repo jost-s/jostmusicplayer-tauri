@@ -194,15 +194,14 @@ fn get_cover_art(path: String) -> Option<String> {
 /// Trim a text field and treat blank as absent, so clearing an input in the edit
 /// dialog removes the tag frame rather than writing an empty string.
 fn norm(value: Option<String>) -> Option<String> {
-    value
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
+    value.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
 }
 
 /// Write edited tags to the audio file at `path` and refresh its DB row so the
 /// library reflects the change without a rescan. Empty text fields clear the
 /// corresponding tag. The frontend refreshes the library after this resolves.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn update_track_tags(
     path: String,
     title: Option<String>,

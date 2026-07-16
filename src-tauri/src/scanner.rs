@@ -271,7 +271,7 @@ pub fn scan_and_sync(
             let _ = crate::db::upsert_track(&conn, &row);
         }
         inserted += 1;
-        if inserted % PROGRESS_BATCH == 0 {
+        if inserted.is_multiple_of(PROGRESS_BATCH) {
             on_progress();
         }
     }

@@ -34,9 +34,7 @@ enum AudioCommand {
     /// Set the output volume as a multiplier over the system ("absolute") volume,
     /// where 1.0 is unattenuated. Fire-and-forget so rapid slider drags don't
     /// block the UI thread waiting on a reply.
-    SetVolume {
-        level: f32,
-    },
+    SetVolume { level: f32 },
 }
 
 /// Handle to the dedicated audio thread.

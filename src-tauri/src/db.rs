@@ -45,9 +45,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     )?;
 
     // PRAGMA can't be parameterized, but SCHEMA_VERSION is a trusted constant.
-    conn.execute_batch(&format!(
-        "PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
-    ))?;
+    conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"))?;
     Ok(())
 }
 

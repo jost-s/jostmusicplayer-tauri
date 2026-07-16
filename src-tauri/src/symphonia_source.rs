@@ -310,7 +310,10 @@ mod tests {
         let channels = source.channels() as usize;
         assert!(channels >= 1);
         let count = source.by_ref().take(200_000).count();
-        assert!(count > channels * 10_000, "decoded too few samples: {count}");
+        assert!(
+            count > channels * 10_000,
+            "decoded too few samples: {count}"
+        );
     }
 
     #[test]
