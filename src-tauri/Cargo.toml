@@ -34,8 +34,9 @@ audiopus = "0.3.0-rc.0"
 ogg = "0.9.2"
 # AAC/MP4 go through our own SymphoniaSource (see src/symphonia_source.rs), not
 # rodio's Decoder, which panics on .m4a. aac = AAC codec + ADTS demux for raw
-# .aac; isomp4 = MP4 container demux for .m4a.
-symphonia = { version = "0.5", features = ["aac", "isomp4"] }
+# .aac; isomp4 = MP4 container demux for .m4a; alac = Apple Lossless, which
+# shares the .m4a extension and container with AAC but needs its own decoder.
+symphonia = { version = "0.5", features = ["aac", "alac", "isomp4"] }
 # Cross-platform OS media controls: macOS Now Playing / Control Center,
 # Windows SMTC, Linux MPRIS. Default features are fine on macOS/Windows; on
 # Linux the default DBus backend links libdbus-1-dev (switch to the zbus feature

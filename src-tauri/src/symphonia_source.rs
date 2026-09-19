@@ -1,6 +1,6 @@
-//! A rodio [`Source`] backed directly by symphonia, used for AAC audio in MP4
-//! (`.m4a`) and raw ADTS (`.aac`) containers, and as a fallback for MP3s that
-//! rodio's own `Decoder` rejects.
+//! A rodio [`Source`] backed directly by symphonia, used for MP4 (`.m4a`) audio
+//! — both AAC and ALAC (Apple Lossless), which share that extension — and raw
+//! ADTS (`.aac`), plus as a fallback for MP3s that rodio's own `Decoder` rejects.
 //!
 //! For AAC/MP4, rodio bundles symphonia decoders but its own `Decoder` still
 //! can't play them: rodio wraps the input in a `ReadSeekSource` whose
@@ -294,6 +294,24 @@ mod tests {
         assert!(channels >= 1);
 
         // The ~1s fixture should yield a substantial run of decoded samples.
+        let count = source.by_ref().take(200_000).count();
+        assert!(
+            count > channels * 30_000,
+            "decoded too few samples: {count}"
+        );
+    }
+
+    #[test]
+    fn decodes_alac_to_samples() {
+        // ALAC (Apple Lossless) shares the .m4a extension and MP4 container with
+        // AAC but needs its own decoder — hence symphonia's `alac` feature. Whole
+        // iTunes-ripped albums are lossless, so without it they fail to play with
+        // "failed to create decoder".
+        let mut source = SymphoniaSource::new(&fixture("lossless.m4a")).unwrap();
+        assert!(source.sample_rate() >= 8_000);
+        let channels = source.channels() as usize;
+        assert!(channels >= 1);
+
         let count = source.by_ref().take(200_000).count();
         assert!(
             count > channels * 30_000,
