@@ -213,7 +213,7 @@ onMounted(async () => {
           await playNext();
           break;
         case "previous":
-          await playPrevious();
+          await playPreviousOrRestart();
           break;
         case "stop":
           await stopPlayback();
@@ -305,14 +305,43 @@ async function playNext(): Promise<boolean> {
   return false;
 }
 
-// OS "previous" control: step to the row before the current one in the visible
-// table. No-op at the top of the list.
+// Step to the row before the current one in the visible table. No-op at the top
+// of the list.
 async function playPrevious() {
   const current = currentTrack.value;
   const view = filteredTracks.value;
   const idx = current ? view.findIndex((t) => t.id === current.id) : -1;
   if (idx > 0) await playTrack(view[idx - 1]);
 }
+
+// How far into a track the "previous" control stops meaning "previous track" and
+// starts meaning "start this one over" (seconds).
+const RESTART_THRESHOLD = 3;
+
+// The usual transport "previous" behaviour, shared by the button and the OS
+// control: early in a track it steps back a row, later it restarts the current
+// track. At the top of the list it always restarts, so the control is never dead.
+async function playPreviousOrRestart() {
+  if (!currentTrack.value) return;
+  if (position.value > RESTART_THRESHOLD || !hasPrevious.value) {
+    await seekToSeconds(0);
+    return;
+  }
+  await playPrevious();
+}
+
+// Index of the playing track in the visible table, or -1 when it isn't shown
+// (filtered out, or nothing playing). Drives the skip buttons' enabled state.
+const currentIndex = computed(() => {
+  const current = currentTrack.value;
+  if (!current) return -1;
+  return filteredTracks.value.findIndex((t) => t.id === current.id);
+});
+
+const hasPrevious = computed(() => currentIndex.value > 0);
+const hasNext = computed(
+  () => currentIndex.value >= 0 && currentIndex.value < filteredTracks.value.length - 1,
+);
 
 // Return to the idle state after playback truly ends (the last track finished on
 // its own). The audio has already stopped, so this just clears the now-playing
@@ -463,14 +492,34 @@ async function onTagsSaved() {
         Scanning…
       </span>
       <div class="transport">
-        <button
-          class="play-toggle"
-          :disabled="!currentTrack"
-          :title="isPlaying ? 'Pause' : 'Play'"
-          @click="togglePlayback"
-        >
-          {{ isPlaying ? "⏸" : "▶" }}
-        </button>
+        <div class="transport-buttons">
+          <button
+            class="skip-btn"
+            :disabled="!currentTrack"
+            :title="hasPrevious ? 'Previous track (restart if playing)' : 'Restart track'"
+            aria-label="Previous track"
+            @click="playPreviousOrRestart"
+          >
+            ⏮
+          </button>
+          <button
+            class="play-toggle"
+            :disabled="!currentTrack"
+            :title="isPlaying ? 'Pause' : 'Play'"
+            @click="togglePlayback"
+          >
+            {{ isPlaying ? "⏸" : "▶" }}
+          </button>
+          <button
+            class="skip-btn"
+            :disabled="!hasNext"
+            title="Next track"
+            aria-label="Next track"
+            @click="playNext"
+          >
+            ⏭
+          </button>
+        </div>
         <img v-if="currentTrack && coverArt" :src="coverArt" class="np-cover" alt="" />
         <div v-if="currentTrack" class="now-playing">
           <span class="np-title">{{ currentTrack.title ?? currentTrack.filename }}</span>
@@ -715,10 +764,25 @@ async function onTagsSaved() {
   overflow: hidden;
 }
 
+/* Skip / play / skip sit closer together than the rest of the transport row, so
+   they read as one control cluster. */
+.transport-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
 .play-toggle {
   width: 2.2rem;
   padding: 0.4em 0;
   font-size: 0.9em;
+  text-align: center;
+}
+
+.skip-btn {
+  width: 2rem;
+  padding: 0.4em 0;
+  font-size: 0.8em;
   text-align: center;
 }
 
