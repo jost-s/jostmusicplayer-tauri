@@ -51,11 +51,13 @@ cd src-tauri && cargo check
 Releases are driven by [release-please](https://github.com/googleapis/release-please)
 from the conventional-commit messages on `main` — **never bump versions by hand**.
 
-Every push to `main` updates one standing `chore(main): release X.Y.Z` PR holding
-the version bumps (`package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`,
-`src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`) and the new `CHANGELOG.md` section.
-Merging that PR cuts a draft GitHub release, builds the bundles onto it, and then
-publishes it — which is what creates the `vX.Y.Z` tag.
+Every push to `main` has `release-please.yml` update one standing
+`chore(main): release X.Y.Z` PR holding the version bumps (`package.json`,
+`package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
+`src-tauri/Cargo.lock`) and the new `CHANGELOG.md` section. Merging that PR is
+what triggers `release.yml`: it tags the merge commit `vX.Y.Z`, drafts a release
+with that changelog section as its notes, builds the bundles onto it, and
+publishes.
 
 So the commit messages *are* the changelog. Types map to sections via
 `release-please-config.json`; `feat` bumps the minor, `fix` (and everything else)

@@ -1,0 +1,21 @@
+name: Release Please
+
+# Run by hand to open the release PR with the version bumps and changelog.
+# Merging it triggers release.yml.
+on:
+  workflow_dispatch:
+
+jobs:
+  release-please:
+    name: Create release PR
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Target the running ref so a manual dispatch on a branch stays on it.
+      - uses: googleapis/release-please-action@v4
+        with:
+          target-branch: ${{ github.ref_name }}
+          # release.yml creates the tag and release.
+          skip-github-release: true
