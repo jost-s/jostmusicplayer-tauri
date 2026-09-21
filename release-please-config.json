@@ -3,8 +3,8 @@
   "packages": {
     ".": {
       "release-type": "node",
-      "draft": true,
       "bump-minor-pre-major": true,
+      "include-component-in-tag": false,
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
         { "type": "fix", "section": "Bug Fixes" },
@@ -28,6 +28,11 @@
           "type": "toml",
           "path": "src-tauri/Cargo.toml",
           "jsonpath": "$.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "src-tauri/Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value=='jostmusicplayer')].version"
         }
       ]
     }
