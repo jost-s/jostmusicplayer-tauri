@@ -1,35 +1,106 @@
 name: Release
 
+# Releases are prepared by release-please and published by this workflow:
+#
+#   push to main -> release-please keeps ONE open "chore(main): release X.Y.Z"
+#                   PR up to date (version bumps + CHANGELOG.md, both derived
+#                   from the conventional-commit messages since the last tag)
+#        merge it -> release-please cuts a DRAFT GitHub release
+#                 -> build.yml builds the bundles and attaches them to it
+#                 -> the draft is published, which creates the vX.Y.Z tag
+#
+# Nothing is tagged or announced until the bundles are attached, so a failed
+# build leaves a draft to inspect rather than an empty public release.
 on:
   workflow_dispatch:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+
+# One release at a time, whatever the ref: every run writes to the same tag and
+# release namespace, so two racing runs would fight over the release PR branch.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  create-release:
-    name: Create draft release
+  prepare-release:
+    name: Prepare release
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     outputs:
-      release_id: ${{ steps.create.outputs.id }}
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      release_id: ${{ steps.find_release.outputs.release_id }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Create draft release
-        id: create
-        uses: softprops/action-gh-release@v3
+      # `target-branch` would otherwise default to the repository's default
+      # branch no matter which ref the run is on, so a manual dispatch from a
+      # branch would read main's history and open a release PR against main.
+      # Pinning it to the running ref makes a dispatch on a throwaway branch a
+      # self-contained rehearsal of the whole flow.
+      - uses: googleapis/release-please-action@v4
+        id: release
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          draft: true
-          prerelease: false
+          target-branch: ${{ github.ref_name }}
+
+      # release-please bumps package.json, package-lock.json, tauri.conf.json and
+      # Cargo.toml, but not Cargo.lock — it has no Rust updater on the `node`
+      # release type. Sync the lockfile's own version entry on the release branch
+      # so the committed lock never lags the manifest.
+      #
+      # This can't live in a pull_request workflow: the release PR is opened by
+      # GITHUB_TOKEN, and events from that token don't start workflow runs.
+      - name: Check out release branch
+        if: steps.release.outputs.prs_created == 'true'
+        uses: actions/checkout@v4
+        with:
+          # release-please names its PR branch after the target branch.
+          ref: release-please--branches--${{ github.ref_name }}
+
+      - name: Sync Cargo.lock
+        if: steps.release.outputs.prs_created == 'true'
+        working-directory: src-tauri
+        # `--workspace` re-resolves only this crate's own entry, leaving every
+        # third-party dependency pinned where it is.
+        run: cargo update --workspace
+
+      - name: Commit Cargo.lock
+        if: steps.release.outputs.prs_created == 'true'
+        run: |
+          if git diff --quiet -- src-tauri/Cargo.lock; then
+            echo "Cargo.lock already in sync."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: sync Cargo.lock" -- src-tauri/Cargo.lock
+          git push
+
+      # tauri-action attaches bundles by numeric release id, which the action
+      # doesn't expose. A draft release has no tag yet, so it can't be looked up
+      # via /releases/tags/<tag> either — list the releases (drafts included, the
+      # token makes them visible) and match on tag_name.
+      - name: Find draft release
+        id: find_release
+        if: steps.release.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          # The release was just created, so it's on the first page.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+            | jq -r --arg tag "$TAG" 'first(.[] | select(.tag_name == $tag) | .id) // empty')
+          if [ -z "$id" ]; then
+            echo "No release found for tag $TAG" >&2
+            exit 1
+          fi
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
 
   build-tauri:
     name: Build bundles
-    needs: create-release
+    needs: prepare-release
+    if: needs.prepare-release.outputs.release_created == 'true'
     # Reuse the matrix build from build.yml, passing the draft release's id so the
     # shared job uploads the bundles to it instead of as workflow artifacts. The
     # GITHUB_TOKEN needs contents: write to attach assets (the called job requests
@@ -38,21 +109,23 @@ jobs:
       contents: write
     uses: ./.github/workflows/build.yml
     with:
-      release_id: ${{ needs.create-release.outputs.release_id }}
+      release_id: ${{ needs.prepare-release.outputs.release_id }}
 
   publish-release:
     name: Publish release
-    needs: [create-release, build-tauri]
+    needs: [prepare-release, build-tauri]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      # Undrafting is what creates the vX.Y.Z tag, at the release commit
+      # release-please recorded as the release's target.
       - uses: actions/github-script@v9
         with:
           script: |
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              release_id: ${{ needs.create-release.outputs.release_id }},
+              release_id: ${{ needs.prepare-release.outputs.release_id }},
               draft: false,
             });
