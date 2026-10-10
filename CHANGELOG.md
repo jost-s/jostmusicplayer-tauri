@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/jost-s/jostmusicplayer-tauri/compare/v0.2.0...v0.3.0) (2026-10-10)
+
+
+### Features
+
+* add forward/back buttons ([a0c59a9](https://github.com/jost-s/jostmusicplayer-tauri/commit/a0c59a9d819ace71a66f03af5cc36f93d28c1d93))
+* enable apple lossless codec playback ([11a8b52](https://github.com/jost-s/jostmusicplayer-tauri/commit/11a8b5268a86aa57b3a83fff682fc97231fd25e9))
+
+
+### Continuous Integration
+
+* cut the release when the release PR is merged ([74c07cd](https://github.com/jost-s/jostmusicplayer-tauri/commit/74c07cd3b517f2e4b95b118bb7a0be448de0319d))
+* drive releases with release-please ([2c568e8](https://github.com/jost-s/jostmusicplayer-tauri/commit/2c568e8c03fcaf52ba743a6dca413a411934550b))
+* **release-please:** add github token ([56383bf](https://github.com/jost-s/jostmusicplayer-tauri/commit/56383bfe56155b10fa633fae5da9a77a4c252106))
+* simplify release process ([cd98304](https://github.com/jost-s/jostmusicplayer-tauri/commit/cd9830493d7c6e7deada720b7f89a8e0763bb971))
+
 ## [0.2.0](https://github.com/jost-s/jostmusicplayer-tauri/compare/v0.1.0...v0.2.0) (2026-07-16)
 
 
