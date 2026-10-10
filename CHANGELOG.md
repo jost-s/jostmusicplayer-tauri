@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/jost-s/jostmusicplayer-tauri/compare/v0.2.0...v0.3.0) (2026-10-10)
+
+
+### Features
+
+* add forward/back buttons ([a0c59a9](https://github.com/jost-s/jostmusicplayer-tauri/commit/a0c59a9d819ace71a66f03af5cc36f93d28c1d93))
+* enable apple lossless codec playback ([11a8b52](https://github.com/jost-s/jostmusicplayer-tauri/commit/11a8b5268a86aa57b3a83fff682fc97231fd25e9))
+
 ## [0.2.0](https://github.com/jost-s/jostmusicplayer-tauri/compare/v0.1.0...v0.2.0) (2026-07-16)
 
 
