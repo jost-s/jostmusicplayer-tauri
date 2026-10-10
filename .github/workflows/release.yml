@@ -1,133 +1,48 @@
 name: Release
 
-# On merging the release PR: tag, draft release with changelog notes, build
-# bundles, publish.
+# Runs on every push to main. release-please keeps the release PR current; when a
+# merge cuts a release it bumps the versions, writes CHANGELOG.md, creates the
+# vX.Y.Z tag and publishes the GitHub release. This same run then builds the
+# installers and attaches them to that release.
 on:
-  pull_request:
-    types: [closed]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-# Serialise releases. Every closed PR starts a run, so only release-PR merges
-# share the group; the rest get their own and can't cancel a pending release.
-concurrency:
-  group: >-
-    ${{ github.event.pull_request.merged == true &&
-        contains(github.event.pull_request.labels.*.name, 'autorelease: pending') &&
-        'release' || format('release-noop-{0}', github.run_id) }}
-  cancel-in-progress: false
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
 
 jobs:
-  create-release:
-    name: Tag and draft release
-    # release-please labels its PR `autorelease: pending`.
-    if: >-
-      github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'autorelease: pending')
+  release-please:
+    name: Release Please
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
     outputs:
-      release_id: ${{ steps.draft.outputs.release_id }}
-      tag: ${{ steps.version.outputs.tag }}
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v4
+      # A GitHub App token rather than GITHUB_TOKEN or a PAT: GITHUB_TOKEN-created
+      # events don't trigger workflows (so test.yml wouldn't run on the release PR),
+      # and a PAT would author the PR as its owner, who can't approve it.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          app-id: ${{ vars.RELEASE_AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.RELEASE_AUTOMATION_APP_PRIVATE_KEY }}
 
-      - name: Read released version
-        id: version
-        run: |
-          version=$(jq -r '.["."]' .release-please-manifest.json)
-          if [ -z "$version" ] || [ "$version" = "null" ]; then
-            echo "No version in .release-please-manifest.json" >&2
-            exit 1
-          fi
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-
-      - name: Create tag
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-          SHA: ${{ github.event.pull_request.merge_commit_sha }}
-        run: |
-          # A re-run finds the tag it pushed earlier; only a foreign one is an error.
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
-            if [ "$(git rev-parse "$TAG^{commit}")" = "$SHA" ]; then
-              echo "Tag $TAG already points at $SHA."
-              exit 0
-            fi
-            echo "Tag $TAG already exists on another commit." >&2
-            exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "$TAG"
-          git push origin "$TAG"
-
-      - name: Create draft release
-        id: draft
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          find_release() {
-            gh api "repos/$GITHUB_REPOSITORY/releases" \
-              | jq -r --arg tag "$TAG" 'first(.[] | select(.tag_name == $tag) | .id) // empty'
-          }
-          # A re-run reuses the draft it created earlier.
-          id=$(find_release)
-          if [ -z "$id" ]; then
-            # Newest CHANGELOG.md section, without its heading.
-            awk '/^## /{n++} n==1' CHANGELOG.md | tail -n +2 > notes.md
-            gh release create "$TAG" \
-              --draft \
-              --title "$TAG" \
-              --notes-file notes.md
-            id=$(find_release)
-          fi
-          if [ -z "$id" ]; then
-            echo "Could not find the release just created for $TAG" >&2
-            exit 1
-          fi
-          echo "release_id=$id" >> "$GITHUB_OUTPUT"
-
-      # release-please won't open the next release PR while a merged one is
-      # still `autorelease: pending`; its own release step would swap this.
-      - name: Mark release PR as tagged
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/autorelease:%20pending" \
-            || true
-          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" -f "labels[]=autorelease: tagged"
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          token: ${{ steps.app-token.outputs.token }}
 
   build-tauri:
     name: Build bundles
-    needs: create-release
-    # Reuse the matrix build from build.yml, passing the draft release's id so the
-    # shared job uploads the bundles to it instead of as workflow artifacts. The
-    # GITHUB_TOKEN needs contents: write to attach assets (the called job requests
-    # it too, but the caller must grant it).
+    needs: release-please
+    # Only when this run actually cut a release. Rebuilds go through build.yml.
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     permissions:
       contents: write
     uses: ./.github/workflows/build.yml
     with:
-      release_id: ${{ needs.create-release.outputs.release_id }}
-
-  publish-release:
-    name: Publish release
-    needs: [create-release, build-tauri]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/github-script@v9
-        with:
-          script: |
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: ${{ needs.create-release.outputs.release_id }},
-              draft: false,
-            });
+      tag_name: ${{ needs.release-please.outputs.tag_name }}

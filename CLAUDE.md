@@ -51,13 +51,25 @@ cd src-tauri && cargo check
 Releases are driven by [release-please](https://github.com/googleapis/release-please)
 from the conventional-commit messages on `main` — **never bump versions by hand**.
 
-Every push to `main` has `release-please.yml` update one standing
-`chore(main): release X.Y.Z` PR holding the version bumps (`package.json`,
+`release.yml` runs on every push to `main`, keeping a `chore(main): release
+X.Y.Z` PR up to date. That PR holds the version bumps (`package.json`,
 `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
-`src-tauri/Cargo.lock`) and the new `CHANGELOG.md` section. Merging that PR is
-what triggers `release.yml`: it tags the merge commit `vX.Y.Z`, drafts a release
-with that changelog section as its notes, builds the bundles onto it, and
-publishes.
+`src-tauri/Cargo.lock`) and the new `CHANGELOG.md` section. Merging it makes
+release-please create the `vX.Y.Z` tag and publish the GitHub release with that
+changelog section as its notes; the same workflow run then builds the bundles
+(`build.yml`) and attaches them to that release.
+
+The build job is gated on the release-please step's `release_created` output, so
+it only runs on the push that actually cuts a release. Release Please
+authenticates with a GitHub App token (`actions/create-github-app-token`, from
+`vars.RELEASE_PLEASE_APP_ID` + `secrets.RELEASE_PLEASE_APP_PRIVATE_KEY`), not
+`GITHUB_TOKEN`: GITHUB_TOKEN-created events don't trigger workflows, so `test.yml`
+wouldn't run on the release PR, and a PAT would author the PR as you — which you
+can't approve.
+
+To rebuild the installers for an already-released version (e.g. one platform's
+build failed), run `build.yml` by hand with the tag:
+`gh workflow run build.yml -f tag_name=vX.Y.Z`.
 
 So the commit messages *are* the changelog. Types map to sections via
 `release-please-config.json`; `feat` bumps the minor, `fix` (and everything else)
